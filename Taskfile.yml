@@ -1,0 +1,29 @@
+version: "3"
+
+tasks:
+  install:
+    desc: frontend の依存関係をインストールする
+    dir: frontend
+    cmds:
+      - npm install
+
+  generate:
+    desc: Wails の frontend binding を生成する
+    cmds:
+      - wails generate module
+
+  test:
+    desc: Go のテストを実行する
+    cmds:
+      - go test ./...
+
+  frontend:build:
+    desc: frontend をビルドする
+    dir: frontend
+    cmds:
+      - npm run build
+
+  dev:
+    desc: Wails 開発サーバーを起動する
+    cmds:
+      - wails dev
