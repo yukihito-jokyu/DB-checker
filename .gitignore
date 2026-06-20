@@ -4,5 +4,6 @@
 # wails
 build/bin
 node_modules
+*.tsbuildinfo
 frontend/dist/*
 !frontend/dist/.gitkeep
