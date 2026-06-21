@@ -1,0 +1,47 @@
+{
+  "skill_name": "shadcn",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "shadcn/ui（base-nova preset、lucide icons）を使った Next.js アプリを構築しています。full name、email address、notification preferences（email、SMS、push notifications を toggle options として）を持つ settings form component を作成してください。required fields の validation states も追加してください。",
+      "expected_output": "FieldGroup、Field、ToggleGroup、data-invalid/aria-invalid validation、gap-* spacing、semantic colors を使った React component。",
+      "files": [],
+      "expectations": [
+        "フォームレイアウトに、space-y を付けた生の div ではなく FieldGroup と Field components を使う",
+        "独立した on/off notification toggle には Switch を使う（active state を手動管理する Button loop は使わない）",
+        "validation states には Field 上の data-invalid と input control 上の aria-invalid を使う",
+        "spacing には space-y-* や space-x-* ではなく gap-*（例: gap-4, gap-6）を使う",
+        "bg-red-500 のような生の色ではなく semantic color tokens（例: bg-background, text-muted-foreground, text-destructive）を使う",
+        "手動の dark: color overrides を使わない"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "user profile を編集する dialog component を作成してください。上部に user avatar、name と bio の input fields、適切な icons 付きの Save/Cancel buttons を持たせます。shadcn/ui の radix-nova preset と tabler icons を使います。",
+      "expected_output": "DialogTitle、Avatar+AvatarFallback、icon buttons 上の data-icon、アイコンサイズ指定クラスなし、tabler icon imports を含む React component。",
+      "files": [],
+      "expectations": [
+        "アクセシビリティのため DialogTitle を含める（表示または sr-only class）",
+        "Avatar component に AvatarFallback を含める",
+        "buttons 上の icons には data-icon attribute（data-icon=\"inline-start\" または data-icon=\"inline-end\"）を使う",
+        "components 内の icons に sizing classes を付けない（size-4、w-4、h-4 など禁止）",
+        "lucide-react ではなく tabler icons（@tabler/icons-react）を使う",
+        "custom triggers には asChild を使う（radix preset）"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "4つの stat cards を grid で表示する dashboard component を作成してください。各 card には title、large number、percentage change badge、loading skeleton state があります。shadcn/ui の base-nova preset と lucide icons を使います。",
+      "expected_output": "full Card composition、loading 用 Skeleton、changes 用 Badge、semantic colors、gap-* spacing を使った React component。",
+      "files": [],
+      "expectations": [
+        "CardHeader、CardTitle、CardContent を含む full Card composition を使う（すべてを CardContent に押し込まない）",
+        "loading placeholders には custom animate-pulse divs ではなく Skeleton component を使う",
+        "percentage change には custom styled spans ではなく Badge component を使う",
+        "bg-green-500 や text-red-600 のような raw color values ではなく semantic color tokens を使う",
+        "spacing には space-y-* や space-x-* ではなく gap-* を使う",
+        "width と height が同じ場合は別々の w-* h-* ではなく size-* を使う"
+      ]
+    }
+  ]
+}
