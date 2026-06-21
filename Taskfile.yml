@@ -23,6 +23,12 @@ tasks:
     cmds:
       - npm run build
 
+  frontend:check:
+    desc: frontend の Biome check を実行する
+    dir: frontend
+    cmds:
+      - npm run check
+
   frontend:lint:
     desc: frontend の lint を実行する
     dir: frontend
