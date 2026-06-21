@@ -15,7 +15,34 @@ tasks:
   test:
     desc: Go のテストを実行する
     cmds:
-      - go test ./...
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test ./...
+
+  format:
+    desc: Go ファイルを gofmt で整形する
+    cmds:
+      - gofmt -w .
+
+  format:check:
+    desc: Go ファイルが gofmt 済みか確認する
+    cmds:
+      - |
+        files="$(gofmt -l .)"
+        if [ -n "$files" ]; then
+          echo "$files"
+          exit 1
+        fi
+
+  lint:
+    desc: Go の lint を golangci-lint で実行する
+    cmds:
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build GOLANGCI_LINT_CACHE={{.TASKFILE_DIR}}/.cache/golangci-lint golangci-lint run
+
+  backend:check:
+    desc: Go backend の format / lint / test を実行する
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: test
 
   frontend:build:
     desc: frontend をビルドする
