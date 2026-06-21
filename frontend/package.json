@@ -2,8 +2,12 @@
 	"name": "frontend",
 	"private": true,
 	"version": "0.0.0",
+	"engines": {
+		"node": ">=20"
+	},
 	"scripts": {
 		"dev": "vite",
+		"check": "biome check .",
 		"build": "vite build",
 		"lint": "biome lint .",
 		"format": "biome format --write .",
