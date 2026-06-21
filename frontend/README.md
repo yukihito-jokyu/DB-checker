@@ -1,5 +1,39 @@
 # Frontend
 
+## 開発コマンド
+
+frontend の依存関係をインストールする。
+
+```bash
+cd frontend
+npm ci
+```
+
+Biome check を実行する。
+
+```bash
+npm run check
+```
+
+frontend build を実行する。
+
+```bash
+npm run build
+```
+
+Taskfile を使う場合は以下でも実行できる。
+
+```bash
+task frontend:check
+task frontend:build
+```
+
+## CI
+
+GitHub Actions の `Frontend CI` は Pull Request で `frontend/**` または `.github/workflows/frontend.yml` が変更された場合のみ実行される。
+
+CI では `frontend` ディレクトリで `npm ci` を実行したあと、`npm run check` による Biome check と `npm run build` による frontend build を実行する。
+
 ## 構成方針
 
 - Wails アプリの frontend は React と TypeScript で実装する。

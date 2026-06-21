@@ -23,6 +23,24 @@ tasks:
     cmds:
       - npm run build
 
+  frontend:check:
+    desc: frontend の Biome check を実行する
+    dir: frontend
+    cmds:
+      - npm run check
+
+  frontend:lint:
+    desc: frontend の lint を実行する
+    dir: frontend
+    cmds:
+      - npm run lint
+
+  frontend:format:
+    desc: frontend の format を実行する
+    dir: frontend
+    cmds:
+      - npm run format
+
   dev:
     desc: Wails 開発サーバーを起動する
     cmds:
