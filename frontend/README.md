@@ -3,7 +3,8 @@
 ## 構成方針
 
 - Wails アプリの frontend は React と TypeScript で実装する。
-- 画面遷移には React Router を使い、初期状態では `createHashRouter` で `/` のみを定義する。
+- 画面遷移には React Router を使い、ルーティング定義は `src/app/router.tsx` に集約する。
+- 初期状態では `createHashRouter` で `/` のみを定義する。
 - shadcn/ui は必要になったコンポーネントだけを追加する。初期導入は `button` のみとする。
 - `@` エイリアスは `frontend/src` を指す。Wails 生成物は `frontend/wailsjs` の公式生成パスから直接 import する。
 
@@ -20,6 +21,12 @@
 - feature 固有の処理
 
 `components/ui` は見た目と基本的な UI 振る舞いに責務を限定する。
+
+## app
+
+アプリ全体の組み立てに関係する定義を配置する。
+
+- `router.tsx`: React Router の route 定義を集約する。`src/main.tsx` は `RouterProvider` へ router を渡すエントリポイントに限定する。
 
 ## components/layout
 
