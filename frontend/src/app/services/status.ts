@@ -1,5 +1,5 @@
-import { unwrapResponse } from "@/lib/appResponse";
 import { Status } from "@wails/go/wails/AppHandler";
+import { unwrapResponse } from "@/lib/appResponse";
 
 export type AppStatus = {
 	ready: boolean;
