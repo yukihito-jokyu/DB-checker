@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { type AppStatus, getAppStatus } from "@/app/services/status";
 import { Button } from "@/components/ui/button";
-import { Status } from "../../../wailsjs/go/wails/AppHandler";
-
-type AppStatus = {
-	ready: boolean;
-	version: string;
-};
 
 type LoadState = "idle" | "loading" | "success" | "error";
 
@@ -15,10 +10,11 @@ export function HomePage() {
 	const [loadState, setLoadState] = useState<LoadState>("idle");
 
 	const loadStatus = useCallback(async () => {
+		// 疎通確認の再試行時も同じ状態遷移で扱う。
 		setLoadState("loading");
 
 		try {
-			const nextStatus = await Status();
+			const nextStatus = await getAppStatus();
 			setStatus(nextStatus);
 			setLoadState("success");
 		} catch {
