@@ -10,3 +10,6 @@ frontend/dist/*
 
 # tools
 .cache/
+
+# coverage
+coverage/

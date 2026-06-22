@@ -17,6 +17,13 @@ tasks:
     cmds:
       - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test ./...
 
+  test:coverage:
+    desc: Go の単体テストカバレッジ HTML を生成する
+    cmds:
+      - mkdir -p coverage
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test ./... -coverprofile=coverage/coverage.out
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go tool cover -html=coverage/coverage.out -o coverage/coverage.html
+
   format:
     desc: Go ファイルを gofmt で整形する
     cmds:
