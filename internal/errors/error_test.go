@@ -30,7 +30,7 @@ func TestWrap(t *testing.T) {
 	if got := string(err.Message); got != "DB 接続に失敗しました" {
 		t.Errorf("Message = %q, want %q", got, "DB 接続に失敗しました")
 	}
-	if err.Err != cause {
+	if !stderrors.Is(err.Err, cause) {
 		t.Errorf("Err = %v, want %v", err.Err, cause)
 	}
 }
@@ -42,7 +42,7 @@ func TestNewUnexpected(t *testing.T) {
 	if err.Code != CodeUnexpected {
 		t.Errorf("Code = %q, want %q", err.Code, CodeUnexpected)
 	}
-	if err.Err != cause {
+	if !stderrors.Is(err.Err, cause) {
 		t.Errorf("Err = %v, want %v", err.Err, cause)
 	}
 	if got := string(err.Message); got != "予期しないエラーが発生しました" {
@@ -111,10 +111,17 @@ func TestError_Unwrap(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.err.Unwrap(); got != tt.want {
+			got := tt.err.Unwrap()
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("Unwrap() = %v, want nil", got)
+				}
+				return
+			}
+			if !stderrors.Is(got, tt.want) {
 				t.Errorf("Unwrap() = %v, want %v", got, tt.want)
 			}
-			if tt.want != nil && !stderrors.Is(tt.err, tt.want) {
+			if !stderrors.Is(tt.err, tt.want) {
 				t.Error("wrapped cause should be discoverable with errors.Is")
 			}
 		})
