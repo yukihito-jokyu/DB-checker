@@ -16,6 +16,9 @@
 - `internal/usecase`: ユースケースと Repository interface を置く。
 - `internal/repository`: `usecase` に定義された Repository interface の具体実装を置く。
 - `internal/handler/wails`: Wails binding、Request / Response、frontend との契約を置く。
+- `internal/config`: アプリ設定の読み込み、検証、設定値型を置く。
+- `internal/logger`: ログ出力の抽象化と初期化を置く。
+- `internal/errors`: アプリ共通のエラー分類、判定、ラップ補助を置く。
 
 ## 依存ルール
 
@@ -24,6 +27,9 @@
 - Repository interface は `internal/usecase` に置く。
 - `internal/repository` は Repository interface の具体実装だけを持つ。
 - Wails 固有の DTO と frontend との契約は `internal/handler/wails` に閉じ込める。
+- `internal/config` に Wails Request / Response や UI 表示用 DTO を置かない。
+- `internal/logger` は Wails runtime に直接依存せず、起動部分から注入できる形にする。
+- `internal/errors` に HTTP 的なステータスや frontend 表示文言を置かない。
 
 ## コメント方針
 
@@ -48,10 +54,27 @@
 
 - 空ディレクトリを Git 管理する場合は `.gitkeep` を置く。
 - 初期段階では実装ファイルとテストファイルを作成しない。
-- `cmd/`、`pkg/`、`internal/config/`、`internal/logger/`、`internal/errors/` は必要になった時点で追加する。
+- `internal/config/`、`internal/logger/`、`internal/errors/` は責務境界を先に固定するため、空ディレクトリとして追加してよい。
+- `cmd/`、`pkg/` は必要になった時点で追加する。
 - 設計方針の詳細ドキュメントや ADR は、必要になった時点で別タスクとして追加する。
 
 ## 検証
 
-- Go パッケージが存在する場合は `go test ./...` を実行する。
+- Go / frontend / Wails 関連の定型操作は、原則として `Taskfile.yml` に定義された `task` コマンドを使用する。
+- Go パッケージが存在する場合は `task test` を実行する。
 - `.go` ファイルが存在せず `no packages to test` になる場合は、その理由を報告する。
+
+| コマンド | 説明 |
+| --- | --- |
+| `task install` | `frontend` 配下で `npm install` を実行し、frontend の依存関係をインストールする。 |
+| `task generate` | Wails の frontend binding を生成し、Go と frontend の連携コードを更新する。 |
+| `task dev` | Wails 開発サーバーを起動し、アプリを開発モードで実行する。 |
+| `task test` | Go のテストを `go test ./...` で実行する。 |
+| `task format` | Go ファイルを `gofmt` で整形する。 |
+| `task format:check` | Go ファイルが `gofmt` 済みか確認し、未整形ファイルがあれば失敗する。 |
+| `task lint` | `golangci-lint` で Go コードの lint を実行する。 |
+| `task backend:check` | `format:check`、`lint`、`test` をまとめて実行する。 |
+| `task frontend:build` | `frontend` 配下で production build を実行する。 |
+| `task frontend:check` | `frontend` 配下で Biome check を実行する。 |
+| `task frontend:lint` | `frontend` 配下で lint を実行する。 |
+| `task frontend:format` | `frontend` 配下で format を実行する。 |
