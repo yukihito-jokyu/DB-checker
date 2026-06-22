@@ -41,6 +41,7 @@ CI では `frontend` ディレクトリで `npm ci` を実行したあと、`npm
 - 初期状態では `createHashRouter` で `/` のみを定義する。
 - shadcn/ui は必要になったコンポーネントだけを追加する。初期導入は `button` のみとする。
 - `@` エイリアスは `frontend/src` を指す。Wails 生成物は `frontend/wailsjs` の公式生成パスから直接 import する。
+- Wails 生成物の import は、疎通確認を除き service または runtime adapter の境界に閉じ込める。
 
 ## components/ui
 
@@ -75,30 +76,32 @@ CI では `frontend` ディレクトリで `npm ci` を実行したあと、`npm
 
 ## components/common
 
-特定の feature に依存しない共通コンポーネントを配置する。
+特定の feature に依存しない共通コンポーネントを配置する。業務ドメインの語彙や Wails service に近い UI は置かない。
 
 例:
 
 - `Loading`
 - `EmptyState`
 - `ErrorMessage`
+- 汎用確認ダイアログ
 
 ## pages
 
 画面単位のコンポーネントを配置する。React Router の route に対応する単位として扱う。
 
-page 専用の hook が必要になった場合は、対象 page の近くに置く。
+page は複数 feature の配置、URL、読み込み状態、画面固有 hook を扱う。page 専用の hook や service が必要になった場合は、対象 page の近くに置く。
 
 ```txt
 pages/
   home/
     HomePage.tsx
     useHomePage.ts
+    services/
 ```
 
 ## features
 
-機能単位の UI、hook、型、service を配置する。土台作りの段階では具体的な feature が未確定のため、空ディレクトリとして管理する。
+機能単位の UI、hook、型、service、store を配置する。DB 接続、スキーマ検査、検査結果など、業務語彙や Wails service に近い UI は `components/common` ではなく feature に置く。
 
 将来的に機能を追加する場合の例:
 
@@ -107,8 +110,9 @@ features/
   user/
     components/
     hooks/
+    services/
+    stores/
     types.ts
-    service.ts
 ```
 
 ## hooks
@@ -132,16 +136,49 @@ src/features/user/components/UserForm/useUserForm.ts
 
 アプリ全体で使う utility を配置する。shadcn/ui で利用する `cn()` は `lib/utils.ts` に配置する。
 
+Wails runtime API の薄い adapter は `src/lib/wails/*.ts` に置く。ここには業務 API 呼び出しを置かない。
+
+例:
+
+- `src/lib/wails/events.ts`: `EventsOn` / `EventsOff` の購読、解除 helper
+- `src/lib/wails/window.ts`: window 操作 wrapper
+- `src/lib/wails/clipboard.ts`: clipboard 操作 wrapper
+- `src/lib/wails/browser.ts`: 外部 URL オープン wrapper
+- `src/lib/wails/logger.ts`: runtime log wrapper
+
 ## 状態管理
 
 初期段階では Zustand store を作成しない。状態管理は以下の優先順位で行う。
 
 1. component 内で閉じる状態は `useState`
-2. 複雑な component 状態は `useReducer`
-3. 複数 component / page で共有する状態が出た場合のみ Zustand を導入する
+2. 複雑だが局所的な状態は component / page / feature 近傍の `useReducer` または custom hook
+3. feature 内で共有する状態は `src/features/<feature>/stores/*.ts`
+4. 複数 feature / page をまたぐアプリ共有状態は `src/stores/*.ts`
+
+Zustand などの状態管理ライブラリは、複数 feature / page で共有する状態が出た時点で導入する。`src/stores` は必要になるまで作成しない。
 
 ## Wails binding
 
 Wails binding の扱いは Wails 公式推奨に従う。外部 HTTP 通信は行わないため、`src/api` は作成しない。
 
 Wails binding を扱うためだけに `api` という名前のディレクトリを作らない。
+
+Wails binding 呼び出しは薄い service 境界に閉じ込める。
+
+- feature に属する Wails binding 呼び出し: `src/features/<feature>/services/*.ts`
+- page 固有で feature 化しない呼び出し: `src/pages/<page>/services/*.ts`
+- app 全体の初期化、疎通、バージョン取得: `src/app/services/*.ts`
+- Wails runtime API の adapter: `src/lib/wails/*.ts`
+
+`frontend/wailsjs` の生成物は原則として上記の境界からのみ import する。既存の初期疎通確認は例外として扱い、機能実装または対象 page 改修時に service 境界へ移す。
+
+## test helper
+
+test helper は利用範囲に近い場所へ置く。
+
+- feature 固有の test helper: `src/features/<feature>/test-utils/*.ts`
+- page 固有の test helper: `src/pages/<page>/test-utils/*.ts`
+- 複数領域で再利用する test helper: `src/test-utils/*.ts`
+- Playwright など E2E 専用 helper: `frontend/e2e` または将来作る E2E ルート配下
+
+本番コードから `test-utils` を import しない。
