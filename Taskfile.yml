@@ -51,6 +51,24 @@ tasks:
       - task: lint
       - task: test
 
+  integration:up:
+    desc: 結合テスト用 DB を起動する
+    cmds:
+      - docker compose -f docker-compose.integration.yml up -d --wait
+
+  integration:test:
+    desc: 実 DB を使う Go 結合テストを実行する
+    env:
+      DB_CHECKER_INTEGRATION_MYSQL_DSN: db_checker:db_checker@tcp(127.0.0.1:13306)/db_checker_integration?parseTime=true
+      DB_CHECKER_INTEGRATION_POSTGRES_DSN: postgres://db_checker:db_checker@127.0.0.1:15432/db_checker_integration?sslmode=disable
+    cmds:
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test -tags=integration ./...
+
+  integration:down:
+    desc: 結合テスト用 DB を停止する
+    cmds:
+      - docker compose -f docker-compose.integration.yml down
+
   frontend:build:
     desc: frontend をビルドする
     dir: frontend
