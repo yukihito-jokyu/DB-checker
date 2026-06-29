@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backend Integration Test"
+  short_description: "UseCase起点の実DB結合テスト方針に従って実装する"
+  default_prompt: "Use backend-integration-test to design or implement backend integration tests for DB-checker."
