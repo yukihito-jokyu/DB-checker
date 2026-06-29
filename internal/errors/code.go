@@ -5,6 +5,8 @@ type message string
 
 const (
 	CodeConfigBroken      Code = "CONFIG_BROKEN"
+	CodeConfigReadFailed  Code = "CONFIG_READ_FAILED"
+	CodeConfigWriteFailed Code = "CONFIG_WRITE_FAILED"
 	CodeDBConnectFailed   Code = "DB_CONNECT_FAILED"
 	CodeSchemaLoadFailed  Code = "SCHEMA_LOAD_FAILED"
 	CodeStatsLoadFailed   Code = "STATS_LOAD_FAILED"
@@ -21,6 +23,8 @@ const (
 
 var defaultMessages = map[Code]message{
 	CodeConfigBroken:      "設定ファイルが壊れています",
+	CodeConfigReadFailed:  "設定ファイルの読み込みに失敗しました",
+	CodeConfigWriteFailed: "設定ファイルの保存に失敗しました",
 	CodeDBConnectFailed:   "DB 接続に失敗しました",
 	CodeSchemaLoadFailed:  "スキーマ取得に失敗しました",
 	CodeStatsLoadFailed:   "統計取得に失敗しました",
