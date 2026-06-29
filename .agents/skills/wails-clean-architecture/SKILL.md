@@ -51,6 +51,20 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - DB 接続、スキーマ取得、データ取得など時間が読めない処理では、`usecase` / `repository` の I/O 系メソッドに `context.Context` を渡す。
 - `context.Canceled` は `OPERATION_CANCELED`、`context.DeadlineExceeded` は `OPERATION_TIMEOUT` に変換する。
 
+## 統計取得のキャンセルとタイムアウト
+
+- 統計取得は Issue #1 の要件に従い、10秒の固定タイムアウトを持つ。
+- 統計取得中に別テーブルの統計取得を開始した場合、`handler/wails` が同じ統計取得カテゴリの前回処理を自動キャンセルする。
+- 統計取得のキャンセル関数、最新リクエスト管理、前回処理の破棄判定は `handler/wails` が所有する。
+- `usecase` は `context.Context` を受け取り、DB処理や集計処理の各段階でキャンセルに協力するだけにする。
+- 統計取得の明示的な `CancelX` Binding は、ユーザー操作としてのキャンセルが要件化されるまで追加しない。
+- 統計取得タイムアウトは完全失敗ではなく部分成功として扱い、取得済み結果と `status: "timeout"` を `data` で返す。
+- 統計取得キャンセルは部分結果表示ではなく制御フローとして扱い、`OPERATION_CANCELED` の `error` を返す。ただし frontend では通知対象外にする。
+- frontend は統計取得 hook または統計画面内で sequence id を管理し、最新 sequence 以外の結果を状態へ反映しない。
+- frontend 共通 API 層や統計 DTO に request id / sequence id を先取りで追加しない。
+- 通常のテーブル選択による統計取得中はテーブル切り替えをブロックしない。UI編集後のデータ・統計再取得中だけ、追加編集、テーブル切り替え、フィルタ変更、並び替え変更などをブロックする。
+- 実DB統計取得が未実装の段階では、production Wails Binding を半端に公開しない。まず `handler/wails` 内の未公開ヘルパーと Go テストでキャンセル境界を検証する。
+
 ## Wails Events の利用方針
 
 - 画面操作に対して結果が1回返れば足りる処理は、Wails Events ではなく Binding の戻り値で扱う。
