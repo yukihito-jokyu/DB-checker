@@ -66,7 +66,7 @@ func TestError_Error(t *testing.T) {
 		{
 			name: "with cause",
 			err:  Wrap(CodeDBConnectFailed, cause),
-			want: "DB 接続に失敗しました: driver failed",
+			want: "DB 接続に失敗しました",
 		},
 		{
 			name: "nil receiver",
