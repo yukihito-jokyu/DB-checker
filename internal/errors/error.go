@@ -30,15 +30,12 @@ func NewUnexpected(err error) *Error {
 	return Wrap(CodeUnexpected, err)
 }
 
-// Error はユーザー向けメッセージと原因エラーを含む文字列表現を返す。
+// Error はユーザー向けメッセージだけを返す。
 func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Err == nil {
-		return string(e.Message)
-	}
-	return string(e.Message) + ": " + e.Err.Error()
+	return string(e.Message)
 }
 
 // Unwrap は errors.Is / errors.As で原因エラーを辿れるようにする。

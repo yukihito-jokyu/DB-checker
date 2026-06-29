@@ -2,11 +2,13 @@ package main
 
 import (
 	"embed"
+	"log/slog"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailshandler "github.com/yukihito-jokyu/DB-checker/internal/handler/wails"
+	applogger "github.com/yukihito-jokyu/DB-checker/internal/logger"
 )
 
 //go:embed all:frontend/dist
@@ -14,7 +16,8 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
-	appHandler := wailshandler.NewAppHandler()
+	logger := applogger.New(slog.LevelInfo)
+	appHandler := wailshandler.NewAppHandler(logger)
 
 	err := wails.Run(&options.App{
 		Title:  "DB-checker",
