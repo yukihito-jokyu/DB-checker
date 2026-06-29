@@ -51,6 +51,23 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - DB 接続、スキーマ取得、データ取得など時間が読めない処理では、`usecase` / `repository` の I/O 系メソッドに `context.Context` を渡す。
 - `context.Canceled` は `OPERATION_CANCELED`、`context.DeadlineExceeded` は `OPERATION_TIMEOUT` に変換する。
 
+## Wails Events の利用方針
+
+- 画面操作に対して結果が1回返れば足りる処理は、Wails Events ではなく Binding の戻り値で扱う。
+- Wails Events は、長時間処理の進捗、backend 起点の状態変化、複数画面や複数 component へ同時通知したい変更に限定する。
+- 単なる成功結果、画面内だけで完結する UI 状態、通常の再取得で済むデータ更新には Events を使わない。
+- イベント名は `<domain>:<action>:<phase>` を基本形にする。例: `schema:reload:started`、`schema:reload:completed`、`config:changed`。
+- payload は `EventsEmit(name, payload)` のようにオブジェクト1個で渡す。複数引数のイベント payload は使わない。
+- payload なしで意味が通るイベントだけ、payload なしを許可する。
+- 長時間処理や再取得競合があり得る通知には、`requestId` または対象 ID を payload に含める。
+- Error を通知する場合は、`code` / `message` を持つ軽い DTO にする。
+- frontend では Wails runtime の `EventsOn` を component から直接呼ばず、`src/lib/wails/events.ts` の薄い adapter 経由で購読する。
+- React component / hook では `useEffect` の cleanup で購読解除関数を必ず呼ぶ。
+- `EventsOffAll` は他機能の購読も解除し得るため、原則として使わない。
+- frontend は、現在注目している `requestId` または対象 ID と一致しないイベントを無視する。
+- Events は通知として扱い、最終的な正のデータは必要に応じて Binding で再取得する。
+- backend 側に先取りでグローバルな重複排除機構を作らない。
+
 ## UseCase 入出力
 
 - UseCase のメソッド引数はプリミティブ値または domain 型を直接受け取る。
