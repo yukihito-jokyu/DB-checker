@@ -46,7 +46,8 @@ func NewAppHandler(logger applogger.Logger, configStore *config.Store) *AppHandl
 	}
 }
 
-func (h *AppHandler) Status() Response[StatusData] {
+// GetStatus はアプリ全体の疎通状態を返す。
+func (h *AppHandler) GetStatus() Response[StatusData] {
 	h.logger.Info(context.Background(), "app status requested", slog.String("operation", "status"))
 
 	return OK(StatusData{
@@ -56,7 +57,8 @@ func (h *AppHandler) Status() Response[StatusData] {
 	})
 }
 
-func (h *AppHandler) Config() Response[ConfigData] {
+// GetConfig はアプリ設定を返す。
+func (h *AppHandler) GetConfig() Response[ConfigData] {
 	h.logger.Info(context.Background(), "app config requested", slog.String("operation", "config"))
 
 	result, err := h.configStore.Load()

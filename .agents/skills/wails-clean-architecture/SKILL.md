@@ -41,6 +41,16 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - 高頻度に呼ばれる binding メソッドの入口ログは `Debug`、通常のユーザー操作は `Info` を基本にする。
 - `domain` は原則としてログを出さない。業務上意味のある分岐や外部 I/O の失敗は、必要に応じて `usecase`、`repository`、`config` 側で記録する。
 
+## Wails Binding 命名と契約
+
+- Binding メソッドは操作種別が分かる `CreateX` / `GetX` / `ListX` / `UpdateX` / `DeleteX` を基本にする。
+- 単一リソースや単一状態の読み取りは `GetX`、複数件の読み取りは `ListX` にする。
+- Wails の成功・失敗レスポンスは原則として `Response[T]` の `data` / `error` 形式に統一する。
+- frontend へ返す Error DTO は `code` / `message` を持ち、`apperr` から `handler/wails` で変換する。
+- 短時間で完了する Binding に cancellation 用の仕組みを先取りで追加しない。
+- DB 接続、スキーマ取得、データ取得など時間が読めない処理では、`usecase` / `repository` の I/O 系メソッドに `context.Context` を渡す。
+- `context.Canceled` は `OPERATION_CANCELED`、`context.DeadlineExceeded` は `OPERATION_TIMEOUT` に変換する。
+
 ## UseCase 入出力
 
 - UseCase のメソッド引数はプリミティブ値または domain 型を直接受け取る。
@@ -66,6 +76,8 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - 例: `FileUserRepository`
 - 例: `SQLiteUserRepository`
 - handler の Request / Response は `internal/handler/wails` に閉じ込める。
+- frontend 返却データは `XData`、Request が必要な場合は `CreateXRequest` / `UpdateXRequest` のように操作名を含める。
+- Request DTO は必要になった時だけ追加し、空の将来用 DTO は作らない。
 
 ## 検証
 

@@ -10,34 +10,52 @@ import (
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
 
-func TestStoreLoadReturnsConfigReadFailed(t *testing.T) {
-	store := NewStore(t.TempDir())
-	if err := os.MkdirAll(store.Path(), 0o750); err != nil {
-		t.Fatalf("MkdirAll() error = %v, want nil", err)
+func TestStoreLoadReturnsAppErrorCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) *Store
+		wantCode apperr.Code
+	}{
+		{
+			name: "read failed",
+			setup: func(t *testing.T) *Store {
+				t.Helper()
+
+				store := NewStore(t.TempDir())
+				if err := os.MkdirAll(store.Path(), 0o750); err != nil {
+					t.Fatalf("MkdirAll() error = %v, want nil", err)
+				}
+				return store
+			},
+			wantCode: apperr.CodeConfigReadFailed,
+		},
+		{
+			name: "write failed",
+			setup: func(t *testing.T) *Store {
+				t.Helper()
+
+				baseDir := filepath.Join(t.TempDir(), "config-parent")
+				if err := os.WriteFile(baseDir, []byte("not directory"), 0o600); err != nil {
+					t.Fatalf("WriteFile() error = %v, want nil", err)
+				}
+				return NewStore(baseDir)
+			},
+			wantCode: apperr.CodeConfigWriteFailed,
+		},
 	}
 
-	_, err := store.Load()
-	if err == nil {
-		t.Fatal("Load() error = nil, want error")
-	}
-	if !apperr.IsCode(err, apperr.CodeConfigReadFailed) {
-		t.Errorf("Load() error code = %v, want %s", err, apperr.CodeConfigReadFailed)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := tt.setup(t)
 
-func TestStoreLoadReturnsConfigWriteFailed(t *testing.T) {
-	baseDir := filepath.Join(t.TempDir(), "config-parent")
-	if err := os.WriteFile(baseDir, []byte("not directory"), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v, want nil", err)
-	}
-	store := NewStore(baseDir)
-
-	_, err := store.Load()
-	if err == nil {
-		t.Fatal("Load() error = nil, want error")
-	}
-	if !apperr.IsCode(err, apperr.CodeConfigWriteFailed) {
-		t.Errorf("Load() error code = %v, want %s", err, apperr.CodeConfigWriteFailed)
+			_, err := store.Load()
+			if err == nil {
+				t.Fatal("Load() error = nil, want error")
+			}
+			if got := apperr.IsCode(err, tt.wantCode); !got {
+				t.Errorf("IsCode(err, %q) = %v, want true", tt.wantCode, got)
+			}
+		})
 	}
 }
 
@@ -119,63 +137,57 @@ func TestStoreLoadReadsValidConfig(t *testing.T) {
 	}
 }
 
-func TestStoreLoadRecoversBrokenJSON(t *testing.T) {
-	store := NewStore(t.TempDir())
-	store.now = func() time.Time {
-		return time.Date(2026, 6, 29, 15, 30, 12, 0, time.UTC)
-	}
-	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o750); err != nil {
-		t.Fatalf("MkdirAll() error = %v, want nil", err)
-	}
-	if err := os.WriteFile(store.Path(), []byte(`{"version":`), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v, want nil", err)
-	}
-
-	result, err := store.Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
+func TestStoreLoadRecoversBrokenConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		fileContent string
+	}{
+		{
+			name:        "broken JSON",
+			fileContent: `{"version":`,
+		},
+		{
+			name:        "invalid schema",
+			fileContent: `{"version":999,"connectionProfiles":[],"activeConnectionProfileId":null,"flowStates":{}}`,
+		},
 	}
 
-	if !result.Recovered {
-		t.Error("Recovered = false, want true")
-	}
-	wantBackupPath := store.Path() + ".broken.20260629T153012"
-	if result.BackupPath != wantBackupPath {
-		t.Errorf("BackupPath = %q, want %q", result.BackupPath, wantBackupPath)
-	}
-	backupBytes, err := os.ReadFile(wantBackupPath)
-	if err != nil {
-		t.Fatalf("ReadFile(backup) error = %v, want nil", err)
-	}
-	if got := string(backupBytes); got != `{"version":` {
-		t.Errorf("backup content = %q, want %q", got, `{"version":`)
-	}
-	assertDefaultConfig(t, result.Config)
-	assertConfigFileIsDefault(t, store.Path())
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			store.now = func() time.Time {
+				return time.Date(2026, 6, 29, 15, 30, 12, 0, time.UTC)
+			}
+			if err := os.MkdirAll(filepath.Dir(store.Path()), 0o750); err != nil {
+				t.Fatalf("MkdirAll() error = %v, want nil", err)
+			}
+			if err := os.WriteFile(store.Path(), []byte(tt.fileContent), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v, want nil", err)
+			}
 
-func TestStoreLoadRecoversInvalidSchema(t *testing.T) {
-	store := NewStore(t.TempDir())
-	store.now = func() time.Time {
-		return time.Date(2026, 6, 29, 15, 30, 12, 0, time.UTC)
-	}
-	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o750); err != nil {
-		t.Fatalf("MkdirAll() error = %v, want nil", err)
-	}
-	if err := os.WriteFile(store.Path(), []byte(`{"version":999,"connectionProfiles":[],"activeConnectionProfileId":null,"flowStates":{}}`), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v, want nil", err)
-	}
+			result, err := store.Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
 
-	result, err := store.Load()
-	if err != nil {
-		t.Fatalf("Load() error = %v, want nil", err)
+			if !result.Recovered {
+				t.Error("Recovered = false, want true")
+			}
+			wantBackupPath := store.Path() + ".broken.20260629T153012"
+			if result.BackupPath != wantBackupPath {
+				t.Errorf("BackupPath = %q, want %q", result.BackupPath, wantBackupPath)
+			}
+			backupBytes, err := os.ReadFile(wantBackupPath)
+			if err != nil {
+				t.Fatalf("ReadFile(backup) error = %v, want nil", err)
+			}
+			if got := string(backupBytes); got != tt.fileContent {
+				t.Errorf("backup content = %q, want %q", got, tt.fileContent)
+			}
+			assertDefaultConfig(t, result.Config)
+			assertConfigFileIsDefault(t, store.Path())
+		})
 	}
-
-	if !result.Recovered {
-		t.Error("Recovered = false, want true")
-	}
-	assertDefaultConfig(t, result.Config)
-	assertConfigFileIsDefault(t, store.Path())
 }
 
 func writeConfigFile(t *testing.T, path string, cfg Config) {
