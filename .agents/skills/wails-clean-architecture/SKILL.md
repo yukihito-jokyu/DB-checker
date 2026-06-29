@@ -32,6 +32,15 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - `main.go` は DI を組み立て、`wails.Run` を呼ぶ。
 - `Bind` には `internal/handler/wails` 配下の handler インスタンスを登録する。
 
+## handler 層のログ位置
+
+- `handler/wails` の binding メソッドでは、関数の先頭で呼び出しログを出す。
+- `Fail(...)` を返す失敗経路では、失敗の `return` 直前に失敗ログを出す。
+- `OK(...)` を返す成功経路では、成功の `return` 直前ログを原則出さない。
+- 長時間処理、非同期処理、キャンセル可能処理では、必要に応じて終了ログを追加してよい。
+- 高頻度に呼ばれる binding メソッドの入口ログは `Debug`、通常のユーザー操作は `Info` を基本にする。
+- `domain` は原則としてログを出さない。業務上意味のある分岐や外部 I/O の失敗は、必要に応じて `usecase`、`repository`、`config` 側で記録する。
+
 ## UseCase 入出力
 
 - UseCase のメソッド引数はプリミティブ値または domain 型を直接受け取る。
