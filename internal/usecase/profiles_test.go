@@ -32,6 +32,7 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 		name          string
 		repository    connectionProfileRepositoryStub
 		wantProfiles  []domain.Profile
+		wantActiveID  *string
 		wantFound     bool
 		wantCause     error
 		wantErrorCode apperr.Code
@@ -41,6 +42,14 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 			repository: connectionProfileRepositoryStub{
 				profiles: []domain.Profile{profile},
 				activeID: stringPointer("profile-1"),
+			},
+			wantProfiles: []domain.Profile{profile},
+			wantActiveID: stringPointer("profile-1"),
+		},
+		{
+			name: "アクティブプロファイル未選択を返す",
+			repository: connectionProfileRepositoryStub{
+				profiles: []domain.Profile{profile},
 			},
 			wantProfiles: []domain.Profile{profile},
 		},
@@ -67,10 +76,13 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			useCase := NewAppUseCase(tt.repository, nil)
 
-			gotProfiles, err := useCase.LoadProfiles()
+			gotProfiles, gotActiveID, err := useCase.LoadProfiles()
 
 			if !reflect.DeepEqual(gotProfiles, tt.wantProfiles) {
 				t.Errorf("LoadProfiles() profiles = %#v, want %#v", gotProfiles, tt.wantProfiles)
+			}
+			if !reflect.DeepEqual(gotActiveID, tt.wantActiveID) {
+				t.Errorf("LoadProfiles() active ID = %#v, want %#v", gotActiveID, tt.wantActiveID)
 			}
 			if gotFound := err != nil; gotFound != tt.wantFound {
 				t.Fatalf("LoadProfiles() error found = %v, want %v", gotFound, tt.wantFound)
