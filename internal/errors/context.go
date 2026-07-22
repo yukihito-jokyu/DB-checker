@@ -5,7 +5,7 @@ import (
 	stderrors "errors"
 )
 
-// FromContextError は context 由来のエラーをアプリケーションエラーへ変換する。
+// コンテキストエラー変換
 func FromContextError(err error) *Error {
 	if stderrors.Is(err, context.Canceled) {
 		return Wrap(CodeOperationCanceled, err)
@@ -13,5 +13,6 @@ func FromContextError(err error) *Error {
 	if stderrors.Is(err, context.DeadlineExceeded) {
 		return Wrap(CodeOperationTimeout, err)
 	}
+
 	return nil
 }

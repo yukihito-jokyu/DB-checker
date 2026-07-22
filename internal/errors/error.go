@@ -8,7 +8,7 @@ type Error struct {
 	Err     error
 }
 
-// New は原因エラーを持たないアプリケーションエラーを作成する。
+// アプリケーションエラー生成
 func New(code Code) *Error {
 	return &Error{
 		Code:    code,
@@ -16,7 +16,7 @@ func New(code Code) *Error {
 	}
 }
 
-// Wrap は原因エラーを保持したアプリケーションエラーを作成する。
+// 原因付きエラー生成
 func Wrap(code Code, err error) *Error {
 	return &Error{
 		Code:    code,
@@ -25,38 +25,42 @@ func Wrap(code Code, err error) *Error {
 	}
 }
 
-// NewUnexpected は未分類の内部エラーを想定外エラーとして包む。
+// 想定外エラー生成
 func NewUnexpected(err error) *Error {
 	return Wrap(CodeUnexpected, err)
 }
 
-// Error はユーザー向けメッセージだけを返す。
+// ユーザー向けメッセージ返却
 func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
+
 	return string(e.Message)
 }
 
-// Unwrap は errors.Is / errors.As で原因エラーを辿れるようにする。
+// 原因エラー返却
 func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.Err
 }
 
-// As は error chain からアプリケーションエラーを取り出す。
+// アプリケーションエラー抽出
 func As(err error) *Error {
 	var appErr *Error
 	if stderrors.As(err, &appErr) {
 		return appErr
 	}
+
 	return nil
 }
 
-// IsCode は error chain 内のアプリケーションエラーが指定コードか判定する。
+// エラーコード一致判定
 func IsCode(err error, code Code) bool {
 	appErr := As(err)
+
 	return appErr != nil && appErr.Code == code
 }
