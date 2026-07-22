@@ -1,6 +1,6 @@
 export namespace wails {
 	
-	export class ConnectionProfileData {
+	export class ProfileResponse {
 	    id: string;
 	    name: string;
 	    dbType: string;
@@ -9,10 +9,9 @@ export namespace wails {
 	    database: string;
 	    schema: string;
 	    user: string;
-	    password: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new ConnectionProfileData(source);
+	        return new ProfileResponse(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -25,23 +24,22 @@ export namespace wails {
 	        this.database = source["database"];
 	        this.schema = source["schema"];
 	        this.user = source["user"];
-	        this.password = source["password"];
 	    }
 	}
-	export class ConfigData {
+	export class ConfigResponse {
 	    version: number;
-	    connectionProfiles: ConnectionProfileData[];
+	    connectionProfiles: ProfileResponse[];
 	    activeConnectionProfileId?: string;
 	    flowStates: Record<string, any>;
 	
 	    static createFrom(source: any = {}) {
-	        return new ConfigData(source);
+	        return new ConfigResponse(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.version = source["version"];
-	        this.connectionProfiles = this.convertValues(source["connectionProfiles"], ConnectionProfileData);
+	        this.connectionProfiles = this.convertValues(source["connectionProfiles"], ProfileResponse);
 	        this.activeConnectionProfileId = source["activeConnectionProfileId"];
 	        this.flowStates = source["flowStates"];
 	    }
@@ -64,7 +62,6 @@ export namespace wails {
 		    return a;
 		}
 	}
-	
 	export class ErrorResponse {
 	    code: string;
 	    message: string;
@@ -79,17 +76,32 @@ export namespace wails {
 	        this.message = source["message"];
 	    }
 	}
-	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigData_ {
-	    data?: ConfigData;
-	    error?: ErrorResponse;
+	export class ProfileCheckResponse {
+	    valid: boolean;
+	    profileCount: number;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigData_(source);
+	        return new ProfileCheckResponse(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.data = this.convertValues(source["data"], ConfigData);
+	        this.valid = source["valid"];
+	        this.profileCount = source["profileCount"];
+	    }
+	}
+	
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigResponse_ {
+	    data?: ConfigResponse;
+	    error?: ErrorResponse;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigResponse_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], ConfigResponse);
 	        this.error = this.convertValues(source["error"], ErrorResponse);
 	    }
 	
@@ -111,13 +123,45 @@ export namespace wails {
 		    return a;
 		}
 	}
-	export class StatusData {
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ProfileCheckResponse_ {
+	    data?: ProfileCheckResponse;
+	    error?: ErrorResponse;
+	
+	    static createFrom(source: any = {}) {
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ProfileCheckResponse_(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], ProfileCheckResponse);
+	        this.error = this.convertValues(source["error"], ErrorResponse);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StatusResponse {
 	    name: string;
 	    ready: boolean;
 	    version: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new StatusData(source);
+	        return new StatusResponse(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -127,17 +171,17 @@ export namespace wails {
 	        this.version = source["version"];
 	    }
 	}
-	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusData_ {
-	    data?: StatusData;
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusResponse_ {
+	    data?: StatusResponse;
 	    error?: ErrorResponse;
 	
 	    static createFrom(source: any = {}) {
-	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusData_(source);
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusResponse_(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.data = this.convertValues(source["data"], StatusData);
+	        this.data = this.convertValues(source["data"], StatusResponse);
 	        this.error = this.convertValues(source["error"], ErrorResponse);
 	    }
 	

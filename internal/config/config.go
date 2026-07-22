@@ -3,10 +3,9 @@ package config
 import "encoding/json"
 
 const (
-	AppDirName   = "DB-checker"
-	FileName     = "config.json"
-	FileVersion  = 1
-	backupSuffix = "broken"
+	AppDirName  = "DB-checker"
+	FileName    = "config.json"
+	FileVersion = 1
 )
 
 type Config struct {
@@ -25,10 +24,9 @@ type ConnectionProfile struct {
 	Database string `json:"database"`
 	Schema   string `json:"schema"`
 	User     string `json:"user"`
-	Password string `json:"password"`
 }
 
-// Default は初期設定ファイルへ保存する既定値を返す。
+// 既定設定生成
 func Default() Config {
 	return Config{
 		Version:                   FileVersion,

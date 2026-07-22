@@ -32,6 +32,19 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - `main.go` は DI を組み立て、`wails.Run` を呼ぶ。
 - `Bind` には `internal/handler/wails` 配下の handler インスタンスを登録する。
 
+## 関数コメント
+
+- Go の全関数・メソッドは直前に一行コメントを置く。テスト、スタブ、ヘルパーも対象にする。
+- コメントは責務を表す短い名詞句にする。例: `// 接続プロファイル設定の検証結果返却`
+- 「〜は…する」、実装経緯、複数文を関数コメントに書かない。
+- `//go:embed` など言語仕様が要求するディレクティブコメントは変更しない。
+
+## 関数内の空行
+
+- ログ、外部呼び出し、分岐、返却など、責務が切り替わる論理ブロックを空行で区切る。
+- 同じ目的の連続処理には不要な空行を入れない。
+- `nlreturn` で返却・分岐前の空行を検査し、ログ直後などの区切りはレビューで確認する。
+
 ## handler 層のログ位置
 
 - `handler/wails` の binding メソッドでは、関数の先頭で呼び出しログを出す。
@@ -107,7 +120,7 @@ Wails 標準構成を維持し、Wails 依存は `handler/wails` と起動部分
 - 例: `FileUserRepository`
 - 例: `SQLiteUserRepository`
 - handler の Request / Response は `internal/handler/wails` に閉じ込める。
-- frontend 返却データは `XData`、Request が必要な場合は `CreateXRequest` / `UpdateXRequest` のように操作名を含める。
+- frontend 返却データは `XResponse`、Request が必要な場合は `CreateXRequest` / `UpdateXRequest` のように操作名を含める。
 - Request DTO は必要になった時だけ追加し、空の将来用 DTO は作らない。
 
 ## 検証

@@ -7,14 +7,15 @@ import (
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
 
+// 成功レスポンス検証
 func TestOK(t *testing.T) {
 	tests := []struct {
 		name string
-		data StatusData
+		data StatusResponse
 	}{
 		{
-			name: "wraps status data",
-			data: StatusData{
+			name: "ステータスデータをラップする",
+			data: StatusResponse{
 				Name:    "DB-checker",
 				Ready:   true,
 				Version: "dev",
@@ -24,66 +25,65 @@ func TestOK(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response := OK(tt.data)
+			got := OK(tt.data)
 
-			if response.Data == nil {
-				t.Fatal("Data = nil, want status data")
+			if got.Data == nil {
+				t.Fatal("OK() Data = nil, want non-nil")
 			}
-			if response.Error != nil {
-				t.Fatalf("Error = %#v, want nil", response.Error)
+
+			if got.Error != nil {
+				t.Errorf("OK() Error = %#v, want nil", got.Error)
 			}
-			if response.Data.Name != tt.data.Name {
-				t.Errorf("Data.Name = %q, want %q", response.Data.Name, tt.data.Name)
-			}
-			if response.Data.Ready != tt.data.Ready {
-				t.Errorf("Data.Ready = %v, want %v", response.Data.Ready, tt.data.Ready)
-			}
-			if response.Data.Version != tt.data.Version {
-				t.Errorf("Data.Version = %q, want %q", response.Data.Version, tt.data.Version)
+
+			if *got.Data != tt.data {
+				t.Errorf("OK() Data = %#v, want %#v", *got.Data, tt.data)
 			}
 		})
 	}
 }
 
+// 失敗レスポンス検証
 func TestFail(t *testing.T) {
 	tests := []struct {
-		name        string
-		err         error
-		wantCode    string
-		wantMessage string
+		name string
+		err  error
+		want ErrorResponse
 	}{
 		{
-			name: "converts app error",
+			name: "アプリケーションエラーを変換する",
 			err: apperr.Wrap(
 				apperr.CodeConfigBroken,
 				stderrors.New("invalid json"),
 			),
-			wantCode:    string(apperr.CodeConfigBroken),
-			wantMessage: "設定ファイルが壊れています",
+			want: ErrorResponse{
+				Code:    string(apperr.CodeConfigBroken),
+				Message: "設定ファイルが壊れています",
+			},
 		},
 		{
-			name:        "converts raw error to unexpected",
-			err:         stderrors.New("raw internal failure"),
-			wantCode:    string(apperr.CodeUnexpected),
-			wantMessage: "予期しないエラーが発生しました",
+			name: "通常のエラーを想定外エラーへ変換する",
+			err:  stderrors.New("raw internal failure"),
+			want: ErrorResponse{
+				Code:    string(apperr.CodeUnexpected),
+				Message: "予期しないエラーが発生しました",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			response := Fail[StatusData](tt.err)
+			got := Fail[StatusResponse](tt.err)
 
-			if response.Data != nil {
-				t.Fatalf("Data = %#v, want nil", response.Data)
+			if got.Data != nil {
+				t.Errorf("Fail() Data = %#v, want nil", got.Data)
 			}
-			if response.Error == nil {
-				t.Fatal("Error = nil, want error response")
+
+			if got.Error == nil {
+				t.Fatal("Fail() Error = nil, want non-nil")
 			}
-			if response.Error.Code != tt.wantCode {
-				t.Errorf("Error.Code = %q, want %q", response.Error.Code, tt.wantCode)
-			}
-			if response.Error.Message != tt.wantMessage {
-				t.Errorf("Error.Message = %q, want %q", response.Error.Message, tt.wantMessage)
+
+			if *got.Error != tt.want {
+				t.Errorf("Fail() Error = %#v, want %#v", *got.Error, tt.want)
 			}
 		})
 	}

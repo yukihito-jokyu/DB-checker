@@ -20,33 +20,38 @@ type slogLogger struct {
 	logger *slog.Logger
 }
 
-// New は標準エラー出力へ text 形式で出力する logger を作成する。
+// 標準エラーロガー生成
 func New(level slog.Leveler) Logger {
 	return NewWithWriter(os.Stderr, level)
 }
 
-// NewWithWriter は指定した出力先へ text 形式で出力する logger を作成する。
+// 出力先指定ロガー生成
 func NewWithWriter(w io.Writer, level slog.Leveler) Logger {
 	handler := slog.NewTextHandler(w, &slog.HandlerOptions{
 		Level: level,
 	})
+
 	return &slogLogger{
 		logger: slog.New(handler),
 	}
 }
 
+// Debugログ出力
 func (l *slogLogger) Debug(ctx context.Context, msg string, attrs ...slog.Attr) {
 	l.log(ctx, slog.LevelDebug, msg, attrs...)
 }
 
+// Infoログ出力
 func (l *slogLogger) Info(ctx context.Context, msg string, attrs ...slog.Attr) {
 	l.log(ctx, slog.LevelInfo, msg, attrs...)
 }
 
+// Warnログ出力
 func (l *slogLogger) Warn(ctx context.Context, msg string, attrs ...slog.Attr) {
 	l.log(ctx, slog.LevelWarn, msg, attrs...)
 }
 
+// Errorログ出力
 func (l *slogLogger) Error(ctx context.Context, msg string, err error, attrs ...slog.Attr) {
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
@@ -57,7 +62,9 @@ func (l *slogLogger) Error(ctx context.Context, msg string, err error, attrs ...
 	l.log(ctx, slog.LevelError, msg, attrs...)
 }
 
+// 構造化ログ出力
 func (l *slogLogger) log(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	// 単体テスト到達不可: Context を nil で渡さない規約のため。
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// コンテキストエラー変換検証
 func TestFromContextError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -16,28 +17,28 @@ func TestFromContextError(t *testing.T) {
 		wantCause error
 	}{
 		{
-			name:      "canceled",
+			name:      "キャンセル済み",
 			err:       context.Canceled,
 			wantFound: true,
 			wantCode:  CodeOperationCanceled,
 			wantCause: context.Canceled,
 		},
 		{
-			name:      "deadline exceeded",
+			name:      "期限超過",
 			err:       context.DeadlineExceeded,
 			wantFound: true,
 			wantCode:  CodeOperationTimeout,
 			wantCause: context.DeadlineExceeded,
 		},
 		{
-			name:      "wrapped canceled",
+			name:      "ラップされたキャンセル済みエラー",
 			err:       fmt.Errorf("query stopped: %w", context.Canceled),
 			wantFound: true,
 			wantCode:  CodeOperationCanceled,
 			wantCause: context.Canceled,
 		},
 		{
-			name:      "raw error",
+			name:      "通常のエラー",
 			err:       stderrors.New("driver failed"),
 			wantFound: false,
 		},
