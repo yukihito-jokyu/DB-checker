@@ -23,7 +23,7 @@ type Target struct {
 	DSN        string
 }
 
-// TargetsFromEnv は結合テストで使う DB 接続先を環境変数から組み立てる。
+// 結合テスト接続先生成
 func TargetsFromEnv() ([]Target, error) {
 	mysqlDSN := os.Getenv(MySQLDSNEnv)
 	postgresDSN := os.Getenv(PostgresDSNEnv)

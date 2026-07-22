@@ -6,6 +6,7 @@ import (
 	"github.com/yukihito-jokyu/DB-checker/test/integration/db"
 )
 
+// DB種別SQL取得検証
 func TestStatementSQLFor(t *testing.T) {
 	statement := Statement{
 		MySQL:    "select 1",

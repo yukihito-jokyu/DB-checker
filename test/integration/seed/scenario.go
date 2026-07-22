@@ -20,7 +20,7 @@ type Statement struct {
 	Postgres string
 }
 
-// SQLFor は DB 種別に対応する SQL を返す。
+// DB種別SQL取得
 func (s Statement) SQLFor(kind db.Kind) (string, error) {
 	switch kind {
 	case db.MySQL:
