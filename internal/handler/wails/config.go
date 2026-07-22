@@ -12,7 +12,7 @@ import (
 func (h *AppHandler) GetConfig() Response[ConfigResponse] {
 	h.logger.Info(context.Background(), "app config requested", slog.String("operation", "config"))
 
-	if _, err := h.appUseCase.LoadProfiles(); err != nil {
+	if _, _, err := h.appUseCase.LoadProfiles(); err != nil {
 		h.logger.Error(context.Background(), "app config request failed", err, slog.String("operation", "config"))
 
 		return Fail[ConfigResponse](err)
