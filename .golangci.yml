@@ -15,6 +15,7 @@ linters:
     - gosec
     - misspell
     - noctx
+    - nlreturn
     - nolintlint
     - prealloc
     - revive
