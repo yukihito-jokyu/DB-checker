@@ -11,20 +11,31 @@ import (
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	wailshandler "github.com/yukihito-jokyu/DB-checker/internal/handler/wails"
 	applogger "github.com/yukihito-jokyu/DB-checker/internal/logger"
+	"github.com/yukihito-jokyu/DB-checker/internal/repository"
+	"github.com/yukihito-jokyu/DB-checker/internal/usecase"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// アプリケーション起動
 func main() {
 	app := NewApp()
 	logger := applogger.New(slog.LevelInfo)
 	configStore, err := config.NewDefaultStore()
 	if err != nil {
 		logger.Error(context.Background(), "config store initialization failed", err)
+
 		return
 	}
-	appHandler := wailshandler.NewAppHandler(logger, configStore)
+	if err := configStore.Initialize(); err != nil {
+		logger.Error(context.Background(), "config initialization failed", err)
+
+		return
+	}
+	appRepository := repository.NewAppRepository(configStore)
+	appUseCase := usecase.NewAppUseCase(appRepository, appRepository)
+	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase)
 
 	err = wails.Run(&options.App{
 		Title:  "DB-checker",
