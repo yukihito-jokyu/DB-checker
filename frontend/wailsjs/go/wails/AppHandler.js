@@ -13,3 +13,7 @@ export function GetConfig() {
 export function GetStatus() {
   return window['go']['wails']['AppHandler']['GetStatus']();
 }
+
+export function ListConnectionProfiles() {
+  return window['go']['wails']['AppHandler']['ListConnectionProfiles']();
+}

@@ -7,3 +7,5 @@ export function CheckProfiles():Promise<wails.Response_github_com_yukihito_jokyu
 export function GetConfig():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigResponse_>;
 
 export function GetStatus():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusResponse_>;
+
+export function ListConnectionProfiles():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
