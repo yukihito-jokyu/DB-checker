@@ -1,6 +1,9 @@
 package wails
 
-import apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
+import (
+	"github.com/yukihito-jokyu/DB-checker/internal/domain"
+	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
+)
 
 type StatusResponse struct {
 	Name    string `json:"name"`
@@ -31,6 +34,11 @@ type ProfileCheckResponse struct {
 	ProfileCount int  `json:"profileCount"`
 }
 
+type ConnectionProfilesResponse struct {
+	Profiles                  []ProfileResponse `json:"profiles"`
+	ActiveConnectionProfileID *string           `json:"activeConnectionProfileId"`
+}
+
 type Response[T any] struct {
 	Data  *T             `json:"data"`
 	Error *ErrorResponse `json:"error"`
@@ -39,6 +47,25 @@ type Response[T any] struct {
 type ErrorResponse struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// プロファイルレスポンス変換
+func toProfileResponses(profiles []domain.Profile) []ProfileResponse {
+	responses := make([]ProfileResponse, 0, len(profiles))
+	for _, profile := range profiles {
+		responses = append(responses, ProfileResponse{
+			ID:       profile.ID,
+			Name:     profile.Name,
+			DBType:   string(profile.DBType),
+			Host:     profile.Host,
+			Port:     profile.Port,
+			Database: profile.Database,
+			Schema:   profile.Schema,
+			User:     profile.User,
+		})
+	}
+
+	return responses
 }
 
 // 成功レスポンス生成

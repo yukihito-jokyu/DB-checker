@@ -24,19 +24,19 @@ type DatabaseConnectionRepository interface {
 }
 
 // 接続プロファイル読込
-func (u *AppUseCase) LoadProfiles() ([]domain.Profile, error) {
+func (u *AppUseCase) LoadProfiles() ([]domain.Profile, *string, error) {
 	profiles, activeID, err := u.profiles.LoadProfiles()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := domain.ValidateActiveProfile(profiles, activeID); err != nil {
 		if errors.Is(err, domain.ErrInvalidActiveProfile) {
-			return nil, apperr.Wrap(apperr.CodeConfigBroken, err)
+			return nil, nil, apperr.Wrap(apperr.CodeConfigBroken, err)
 		}
 
 		// 単体テスト到達不可: domain.ValidateActiveProfile は ErrInvalidActiveProfile 以外を返さないため。
-		return nil, err
+		return nil, nil, err
 	}
 
-	return profiles, nil
+	return profiles, activeID, nil
 }
