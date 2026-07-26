@@ -28,6 +28,56 @@ type Profile struct {
 	User     string
 }
 
+type ProfileDraft struct {
+	ID       string
+	Name     string
+	DBType   DBType
+	Host     string
+	Port     int
+	Database string
+	Schema   string
+	User     string
+	Password string
+}
+
+// プロファイル下書き生成
+func NewProfileDraft(id, name string, dbType DBType, host string, port int, database, schema, user, password string) (ProfileDraft, error) {
+	draft := ProfileDraft{
+		ID:       id,
+		Name:     name,
+		DBType:   dbType,
+		Host:     host,
+		Port:     port,
+		Database: database,
+		Schema:   schema,
+		User:     user,
+		Password: password,
+	}
+	if err := draft.Validate(); err != nil {
+		return ProfileDraft{}, err
+	}
+
+	return draft, nil
+}
+
+// プロファイル下書き検証
+func (d ProfileDraft) Validate() error {
+	if !validProfileName(d.Name) || !validDBType(d.DBType) {
+		return ErrInvalidProfile
+	}
+
+	if !validConnectionValue(d.Host) || !validPort(d.Port) || !validConnectionValue(d.Database) || !validConnectionValue(d.User) || !validSchema(d.DBType, d.Schema) {
+		return ErrInvalidProfile
+	}
+
+	return nil
+}
+
+// 接続プロファイル変換
+func (d ProfileDraft) ToProfile(id string) (Profile, error) {
+	return NewProfile(id, d.Name, d.DBType, d.Host, d.Port, d.Database, d.Schema, d.User)
+}
+
 // プロファイル生成
 func NewProfile(id, name string, dbType DBType, host string, port int, database, schema, user string) (Profile, error) {
 	if id == "" || !validProfileName(name) || !validDBType(dbType) {
