@@ -72,6 +72,22 @@ func TestSlogLoggerOutput(t *testing.T) {
 			},
 		},
 		{
+			name: "エラーコード付きログは原因を出力しない",
+			write: func(log Logger) {
+				log.ErrorCode(context.Background(), "connection profile save failed", "CONNECTION_FAILED", slog.String("operation", "connection_profile_save"))
+			},
+			wantContained: []string{
+				"level=ERROR",
+				`msg="connection profile save failed"`,
+				"code=CONNECTION_FAILED",
+			},
+			wantAbsent: []string{
+				"error=",
+				"cause=",
+				"secret-password",
+			},
+		},
+		{
 			name: "エラーなしのエラーログ",
 			write: func(log Logger) {
 				log.Error(context.Background(), "unexpected state", nil, slog.String("operation", "status"))
