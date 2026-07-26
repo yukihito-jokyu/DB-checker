@@ -26,6 +26,8 @@ func newAppRepository(store *config.Store, credentials credentialStore) *AppRepo
 
 type credentialStore interface {
 	Get(service, user string) (string, error)
+	Set(service, user, password string) error
+	Delete(service, user string) error
 }
 
 type systemCredentialStore struct{}
@@ -34,4 +36,16 @@ type systemCredentialStore struct{}
 func (systemCredentialStore) Get(service, user string) (string, error) {
 	// 単体テスト到達不可: OS の資格情報ストアへ直接アクセスする外部境界のため。
 	return keyring.Get(service, user)
+}
+
+// OS資格情報保存
+func (systemCredentialStore) Set(service, user, password string) error {
+	// 単体テスト到達不可: OS の資格情報ストアへ直接アクセスする外部境界のため。
+	return keyring.Set(service, user, password)
+}
+
+// OS資格情報削除
+func (systemCredentialStore) Delete(service, user string) error {
+	// 単体テスト到達不可: OS の資格情報ストアへ直接アクセスする外部境界のため。
+	return keyring.Delete(service, user)
 }

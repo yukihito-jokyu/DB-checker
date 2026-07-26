@@ -39,6 +39,18 @@ type ConnectionProfilesResponse struct {
 	ActiveConnectionProfileID *string           `json:"activeConnectionProfileId"`
 }
 
+type SaveConnectionProfileRequest struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	DBType   string `json:"dbType"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Database string `json:"database"`
+	Schema   string `json:"schema"`
+	User     string `json:"user"`
+	Password string `json:"password"`
+}
+
 type Response[T any] struct {
 	Data  *T             `json:"data"`
 	Error *ErrorResponse `json:"error"`

@@ -1,5 +1,5 @@
 export namespace wails {
-	
+
 	export class ProfileResponse {
 	    id: string;
 	    name: string;
@@ -9,7 +9,7 @@ export namespace wails {
 	    database: string;
 	    schema: string;
 	    user: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ProfileResponse(source);
 	    }
@@ -267,6 +267,31 @@ export namespace wails {
 		    return a;
 		}
 	}
+	export class SaveConnectionProfileRequest {
+	    id: string;
+	    name: string;
+	    dbType: string;
+	    host: string;
+	    port: number;
+	    database: string;
+	    schema: string;
+	    user: string;
+	    password: string;
+	    static createFrom(source: any = {}) {
+	        return new SaveConnectionProfileRequest(source);
+	    }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.dbType = source["dbType"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.database = source["database"];
+	        this.schema = source["schema"];
+	        this.user = source["user"];
+	        this.password = source["password"];
+	    }
+	}
 
 }
-

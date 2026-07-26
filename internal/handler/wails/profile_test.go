@@ -1,12 +1,18 @@
 package wails
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
+	applogger "github.com/yukihito-jokyu/DB-checker/internal/logger"
+	"github.com/yukihito-jokyu/DB-checker/internal/usecase"
 )
 
 // 接続プロファイル確認
@@ -223,6 +229,171 @@ func TestAppHandlerListConnectionProfiles(t *testing.T) {
 				if *got.Error != *tt.wantError {
 					t.Errorf("ListConnectionProfiles() Error = %#v, want %#v", *got.Error, *tt.wantError)
 				}
+			}
+		})
+	}
+}
+
+// 接続プロファイル保存入力検証
+func TestAppHandlerSaveConnectionProfileRejectsInvalidRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		request SaveConnectionProfileRequest
+	}{
+		{
+			name: "不正な入力を安全なエラーで返す",
+			request: SaveConnectionProfileRequest{
+				Name:     "Local DB",
+				DBType:   "postgres",
+				Host:     "",
+				Port:     5432,
+				Database: "app",
+				Schema:   "public",
+				User:     "user",
+				Password: "secret",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := newTestAppHandler(t, config.NewStore(t.TempDir()), &connectionProfileRepositoryStub{})
+
+			got := handler.SaveConnectionProfile(tt.request)
+
+			if got.Data != nil {
+				t.Errorf("SaveConnectionProfile() Data = %#v, want nil", got.Data)
+			}
+			if got.Error == nil {
+				t.Fatal("SaveConnectionProfile() Error = nil, want non-nil")
+			}
+			if got.Error.Code != string(apperr.CodeValidationFailed) {
+				t.Errorf("SaveConnectionProfile() Error.Code = %q, want %q", got.Error.Code, apperr.CodeValidationFailed)
+			}
+		})
+	}
+}
+
+// 接続プロファイル保存成功応答
+func TestAppHandlerSaveConnectionProfile(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  SaveConnectionProfileRequest
+		profiles []domain.Profile
+		activeID *string
+		wantData ConnectionProfilesResponse
+	}{
+		{
+			name: "保存後のプロファイルとアクティブIDを返す",
+			request: SaveConnectionProfileRequest{
+				ID:       "profile-1",
+				Name:     "Updated DB",
+				DBType:   "postgres",
+				Host:     "db.example.com",
+				Port:     5433,
+				Database: "updated",
+				Schema:   "public",
+				User:     "admin",
+				Password: "new-password",
+			},
+			profiles: []domain.Profile{
+				newTestProfile(t, "profile-1", domain.DBTypePostgres),
+			},
+			activeID: stringPointer("profile-1"),
+			wantData: ConnectionProfilesResponse{
+				Profiles: []ProfileResponse{
+					{
+						ID:       "profile-1",
+						Name:     "Updated DB",
+						DBType:   "postgres",
+						Host:     "db.example.com",
+						Port:     5433,
+						Database: "updated",
+						Schema:   "public",
+						User:     "admin",
+					},
+				},
+				ActiveConnectionProfileID: stringPointer("profile-1"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := newTestAppHandler(t, config.NewStore(t.TempDir()), &connectionProfileRepositoryStub{
+				profiles: tt.profiles,
+				activeID: tt.activeID,
+			})
+
+			got := handler.SaveConnectionProfile(tt.request)
+
+			if got.Error != nil {
+				t.Fatalf("SaveConnectionProfile() Error = %#v, want nil", got.Error)
+			}
+			if got.Data == nil {
+				t.Fatal("SaveConnectionProfile() Data = nil, want non-nil")
+			}
+			if !reflect.DeepEqual(*got.Data, tt.wantData) {
+				t.Errorf("SaveConnectionProfile() Data = %#v, want %#v", *got.Data, tt.wantData)
+			}
+		})
+	}
+}
+
+// 接続失敗ログの秘密情報非出力
+func TestAppHandlerSaveConnectionProfileDoesNotLogConnectionErrorCause(t *testing.T) {
+	tests := []struct {
+		name              string
+		connectionError   error
+		request           SaveConnectionProfileRequest
+		wantErrorCode     apperr.Code
+		wantLogSubstring  string
+		avoidLogSubstring string
+	}{
+		{
+			name:            "接続失敗の原因とパスワードをログへ出力しない",
+			connectionError: errors.New("connection failed: password=secret-password"),
+			request: SaveConnectionProfileRequest{
+				Name:     "Local DB",
+				DBType:   "postgres",
+				Host:     "localhost",
+				Port:     5432,
+				Database: "app",
+				Schema:   "public",
+				User:     "user",
+				Password: "secret-password",
+			},
+			wantErrorCode:     apperr.CodeConnectionFailed,
+			wantLogSubstring:  "code=CONNECTION_FAILED",
+			avoidLogSubstring: "secret-password",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			logger := applogger.NewWithWriter(&buffer, slog.LevelDebug)
+			profileRepository := &connectionProfileRepositoryStub{
+				connectionErr: tt.connectionError,
+			}
+			appUseCase := usecase.NewAppUseCase(profileRepository)
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+
+			result := handler.SaveConnectionProfile(tt.request)
+
+			if result.Error == nil {
+				t.Fatal("SaveConnectionProfile() Error = nil, want non-nil")
+			}
+			if result.Error.Code != string(tt.wantErrorCode) {
+				t.Errorf("SaveConnectionProfile() Error.Code = %q, want %q", result.Error.Code, tt.wantErrorCode)
+			}
+
+			output := buffer.String()
+			if !strings.Contains(output, tt.wantLogSubstring) {
+				t.Errorf("log output = %q, want substring %q", output, tt.wantLogSubstring)
+			}
+			if strings.Contains(output, tt.avoidLogSubstring) {
+				t.Errorf("log output = %q, want no substring %q", output, tt.avoidLogSubstring)
 			}
 		})
 	}

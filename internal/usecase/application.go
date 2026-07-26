@@ -1,15 +1,29 @@
 package usecase
 
+import (
+	"context"
+
+	"github.com/yukihito-jokyu/DB-checker/internal/domain"
+)
+
+// アプリケーションリポジトリ
+type AppRepository interface {
+	LoadProfiles() ([]domain.Profile, *string, error)
+	SaveProfiles([]domain.Profile, *string) error
+	GetCredential(string) (credential string, found bool, err error)
+	SetCredential(string, string) error
+	DeleteCredential(string) error
+	CheckConnection(context.Context, domain.Profile, string) error
+}
+
 // アプリケーションユースケース
 type AppUseCase struct {
-	profiles    ConnectionProfileRepository
-	credentials CredentialRepository
+	repository AppRepository
 }
 
 // アプリケーションユースケース生成
-func NewAppUseCase(profiles ConnectionProfileRepository, credentials CredentialRepository) *AppUseCase {
+func NewAppUseCase(repository AppRepository) *AppUseCase {
 	return &AppUseCase{
-		profiles:    profiles,
-		credentials: credentials,
+		repository: repository,
 	}
 }

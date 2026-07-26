@@ -14,6 +14,7 @@ type Logger interface {
 	Info(ctx context.Context, msg string, attrs ...slog.Attr)
 	Warn(ctx context.Context, msg string, attrs ...slog.Attr)
 	Error(ctx context.Context, msg string, err error, attrs ...slog.Attr)
+	ErrorCode(ctx context.Context, msg, code string, attrs ...slog.Attr)
 }
 
 type slogLogger struct {
@@ -59,6 +60,12 @@ func (l *slogLogger) Error(ctx context.Context, msg string, err error, attrs ...
 			attrs = append(attrs, slog.String("cause", cause.Error()))
 		}
 	}
+	l.log(ctx, slog.LevelError, msg, attrs...)
+}
+
+// エラーコード付きログ出力
+func (l *slogLogger) ErrorCode(ctx context.Context, msg, code string, attrs ...slog.Attr) {
+	attrs = append(attrs, slog.String("code", code))
 	l.log(ctx, slog.LevelError, msg, attrs...)
 }
 

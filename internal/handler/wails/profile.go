@@ -3,6 +3,9 @@ package wails
 import (
 	"context"
 	"log/slog"
+
+	"github.com/yukihito-jokyu/DB-checker/internal/domain"
+	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
 
 // 接続プロファイル確認
@@ -20,6 +23,40 @@ func (h *AppHandler) CheckProfiles() Response[ProfileCheckResponse] {
 		Valid:        true,
 		ProfileCount: len(profiles),
 	})
+}
+
+// 接続プロファイル保存
+func (h *AppHandler) SaveConnectionProfile(request SaveConnectionProfileRequest) Response[ConnectionProfilesResponse] {
+	h.logger.Info(context.Background(), "connection profile save requested", slog.String("operation", "connection_profile_save"))
+
+	draft, err := domain.NewProfileDraft(request.ID, request.Name, domain.DBType(request.DBType), request.Host, request.Port, request.Database, request.Schema, request.User, request.Password)
+	if err != nil {
+		h.logConnectionProfileSaveFailure(apperr.Wrap(apperr.CodeValidationFailed, err))
+
+		return Fail[ConnectionProfilesResponse](apperr.Wrap(apperr.CodeValidationFailed, err))
+	}
+
+	profiles, activeID, err := h.appUseCase.SaveConnectionProfile(context.Background(), draft)
+	if err != nil {
+		h.logConnectionProfileSaveFailure(err)
+
+		return Fail[ConnectionProfilesResponse](err)
+	}
+
+	return OK(ConnectionProfilesResponse{
+		Profiles:                  toProfileResponses(profiles),
+		ActiveConnectionProfileID: activeID,
+	})
+}
+
+// 接続プロファイル保存失敗ログ出力
+func (h *AppHandler) logConnectionProfileSaveFailure(err error) {
+	code := apperr.CodeUnexpected
+	if appErr := apperr.As(err); appErr != nil {
+		code = appErr.Code
+	}
+
+	h.logger.ErrorCode(context.Background(), "connection profile save failed", string(code), slog.String("operation", "connection_profile_save"))
 }
 
 // 接続プロファイル一覧取得

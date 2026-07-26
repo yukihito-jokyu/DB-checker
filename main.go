@@ -34,7 +34,7 @@ func main() {
 		return
 	}
 	appRepository := repository.NewAppRepository(configStore)
-	appUseCase := usecase.NewAppUseCase(appRepository, appRepository)
+	appUseCase := usecase.NewAppUseCase(appRepository)
 	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase)
 
 	err = wails.Run(&options.App{
