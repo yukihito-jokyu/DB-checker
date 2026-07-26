@@ -70,6 +70,41 @@ func (u *AppUseCase) SaveConnectionProfile(ctx context.Context, draft domain.Pro
 	return nextProfiles, activeID, nil
 }
 
+// アクティブ接続プロファイル切替
+func (u *AppUseCase) ActivateConnectionProfile(ctx context.Context, profileID string) ([]domain.Profile, *string, error) {
+	profiles, activeID, err := u.LoadProfiles()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	profile, found := findProfile(profiles, profileID)
+	if !found {
+		return nil, nil, apperr.New(apperr.CodeProfileNotFound)
+	}
+	if activeID != nil && *activeID == profileID {
+		return profiles, activeID, nil
+	}
+
+	password, found, err := u.repository.GetCredential(profileID)
+	if err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+	if !found {
+		password = ""
+	}
+
+	if err := u.repository.CheckConnection(ctx, profile, password); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeConnectionFailed, err)
+	}
+
+	nextActiveID := profileID
+	if err := u.repository.SaveProfiles(profiles, &nextActiveID); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeConfigSaveFailed, err)
+	}
+
+	return profiles, &nextActiveID, nil
+}
+
 // 保存用パスワード取得
 func (u *AppUseCase) passwordForSave(draft domain.ProfileDraft, editing bool) (string, bool, error) {
 	if draft.Password != "" {
@@ -123,6 +158,17 @@ func containsProfile(profiles []domain.Profile, profileID string) bool {
 	}
 
 	return false
+}
+
+// プロファイル検索
+func findProfile(profiles []domain.Profile, profileID string) (domain.Profile, bool) {
+	for _, profile := range profiles {
+		if profile.ID == profileID {
+			return profile, true
+		}
+	}
+
+	return domain.Profile{}, false
 }
 
 // プロファイル置換
