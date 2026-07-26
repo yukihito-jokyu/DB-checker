@@ -17,3 +17,7 @@ export function GetStatus() {
 export function ListConnectionProfiles() {
   return window['go']['wails']['AppHandler']['ListConnectionProfiles']();
 }
+
+export function SaveConnectionProfile(arg1) {
+  return window['go']['wails']['AppHandler']['SaveConnectionProfile'](arg1);
+}
