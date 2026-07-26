@@ -18,6 +18,291 @@ type connectionProfileArgs struct {
 	user     string
 }
 
+type profileDraftArgs struct {
+	id       string
+	name     string
+	dbType   DBType
+	host     string
+	port     int
+	database string
+	schema   string
+	user     string
+	password string
+}
+
+// プロファイル下書き生成検証
+func TestNewProfileDraft(t *testing.T) {
+	valid := profileDraftArgs{
+		name:     "Local DB",
+		dbType:   DBTypePostgres,
+		host:     "localhost",
+		port:     5432,
+		database: "app",
+		schema:   "public",
+		user:     "user",
+		password: "secret",
+	}
+	tests := []struct {
+		name    string
+		args    profileDraftArgs
+		want    ProfileDraft
+		wantErr bool
+	}{
+		{
+			name: "PostgreSQL下書き",
+			args: valid,
+			want: ProfileDraft{
+				Name:     "Local DB",
+				DBType:   DBTypePostgres,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "app",
+				Schema:   "public",
+				User:     "user",
+				Password: "secret",
+			},
+		},
+		{
+			name: "MySQL下書き",
+			args: profileDraftArgs{
+				id:       "profile-1",
+				name:     "Local MySQL",
+				dbType:   DBTypeMySQL,
+				host:     "localhost",
+				port:     3306,
+				database: "app",
+				user:     "user",
+			},
+			want: ProfileDraft{
+				ID:       "profile-1",
+				Name:     "Local MySQL",
+				DBType:   DBTypeMySQL,
+				Host:     "localhost",
+				Port:     3306,
+				Database: "app",
+				User:     "user",
+			},
+		},
+		{
+			name: "不正な下書き",
+			args: profileDraftArgs{
+				name:     "Local DB",
+				dbType:   DBTypePostgres,
+				host:     "",
+				port:     5432,
+				database: "app",
+				schema:   "public",
+				user:     "user",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewProfileDraft(tt.args.id, tt.args.name, tt.args.dbType, tt.args.host, tt.args.port, tt.args.database, tt.args.schema, tt.args.user, tt.args.password)
+
+			if gotErr := errors.Is(err, ErrInvalidProfile); gotErr != tt.wantErr {
+				t.Errorf("NewProfileDraft() invalid profile error = %v, want %v (error = %v)", gotErr, tt.wantErr, err)
+			}
+			if tt.wantErr {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("NewProfileDraft() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// プロファイル下書き検証
+func TestProfileDraftValidate(t *testing.T) {
+	valid := ProfileDraft{
+		Name:     "Local DB",
+		DBType:   DBTypePostgres,
+		Host:     "localhost",
+		Port:     5432,
+		Database: "app",
+		Schema:   "public",
+		User:     "user",
+	}
+	tests := []struct {
+		name    string
+		draft   ProfileDraft
+		wantErr bool
+	}{
+		{
+			name:  "PostgreSQL下書き",
+			draft: valid,
+		},
+		{
+			name: "MySQL下書き",
+			draft: ProfileDraft{
+				Name:     "Local MySQL",
+				DBType:   DBTypeMySQL,
+				Host:     "localhost",
+				Port:     3306,
+				Database: "app",
+				User:     "user",
+			},
+		},
+		{
+			name: "空白だけの名前",
+			draft: ProfileDraft{
+				Name:     " ",
+				DBType:   valid.DBType,
+				Host:     valid.Host,
+				Port:     valid.Port,
+				Database: valid.Database,
+				Schema:   valid.Schema,
+				User:     valid.User,
+			},
+			wantErr: true,
+		},
+		{
+			name: "未対応のデータベース種別",
+			draft: ProfileDraft{
+				Name:     valid.Name,
+				DBType:   "sqlite",
+				Host:     valid.Host,
+				Port:     valid.Port,
+				Database: valid.Database,
+				Schema:   valid.Schema,
+				User:     valid.User,
+			},
+			wantErr: true,
+		},
+		{
+			name: "空のホスト",
+			draft: ProfileDraft{
+				Name:     valid.Name,
+				DBType:   valid.DBType,
+				Port:     valid.Port,
+				Database: valid.Database,
+				Schema:   valid.Schema,
+				User:     valid.User,
+			},
+			wantErr: true,
+		},
+		{
+			name: "範囲外のポート",
+			draft: ProfileDraft{
+				Name:     valid.Name,
+				DBType:   valid.DBType,
+				Host:     valid.Host,
+				Port:     0,
+				Database: valid.Database,
+				Schema:   valid.Schema,
+				User:     valid.User,
+			},
+			wantErr: true,
+		},
+		{
+			name: "空のデータベース名",
+			draft: ProfileDraft{
+				Name:   valid.Name,
+				DBType: valid.DBType,
+				Host:   valid.Host,
+				Port:   valid.Port,
+				Schema: valid.Schema,
+				User:   valid.User,
+			},
+			wantErr: true,
+		},
+		{
+			name: "空のユーザー名",
+			draft: ProfileDraft{
+				Name:     valid.Name,
+				DBType:   valid.DBType,
+				Host:     valid.Host,
+				Port:     valid.Port,
+				Database: valid.Database,
+				Schema:   valid.Schema,
+			},
+			wantErr: true,
+		},
+		{
+			name: "PostgreSQLの空スキーマ",
+			draft: ProfileDraft{
+				Name:     valid.Name,
+				DBType:   valid.DBType,
+				Host:     valid.Host,
+				Port:     valid.Port,
+				Database: valid.Database,
+				User:     valid.User,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.draft.Validate()
+			if gotErr := errors.Is(err, ErrInvalidProfile); gotErr != tt.wantErr {
+				t.Errorf("Validate() invalid profile error = %v, want %v (error = %v)", gotErr, tt.wantErr, err)
+			}
+		})
+	}
+}
+
+// 接続プロファイル変換検証
+func TestProfileDraftToProfile(t *testing.T) {
+	draft := ProfileDraft{
+		Name:     "Local DB",
+		DBType:   DBTypePostgres,
+		Host:     "localhost",
+		Port:     5432,
+		Database: "app",
+		Schema:   "public",
+		User:     "user",
+		Password: "secret",
+	}
+	tests := []struct {
+		name    string
+		draft   ProfileDraft
+		id      string
+		want    Profile
+		wantErr bool
+	}{
+		{
+			name:  "下書きをプロファイルへ変換する",
+			draft: draft,
+			id:    "profile-1",
+			want: Profile{
+				ID:       "profile-1",
+				Name:     "Local DB",
+				DBType:   DBTypePostgres,
+				Host:     "localhost",
+				Port:     5432,
+				Database: "app",
+				Schema:   "public",
+				User:     "user",
+			},
+		},
+		{
+			name:    "空のIDを拒否する",
+			draft:   draft,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.draft.ToProfile(tt.id)
+
+			if gotErr := errors.Is(err, ErrInvalidProfile); gotErr != tt.wantErr {
+				t.Errorf("ToProfile() invalid profile error = %v, want %v (error = %v)", gotErr, tt.wantErr, err)
+			}
+			if tt.wantErr {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ToProfile() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 // プロファイル生成検証
 func TestNewProfile(t *testing.T) {
 	valid := connectionProfileArgs{
