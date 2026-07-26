@@ -4,28 +4,148 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
 
-// 接続プロファイルリポジトリ
-type ConnectionProfileRepository interface {
-	LoadProfiles() ([]domain.Profile, *string, error)
+// 接続プロファイル保存
+func (u *AppUseCase) SaveConnectionProfile(ctx context.Context, draft domain.ProfileDraft) ([]domain.Profile, *string, error) {
+	if err := draft.Validate(); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	profiles, activeID, err := u.LoadProfiles()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	profileID := draft.ID
+	editing := profileID != ""
+	if !editing {
+		profileID = uuid.NewString()
+	} else if !containsProfile(profiles, profileID) {
+		return nil, nil, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile, err := draft.ToProfile(profileID)
+	if err != nil {
+		// 単体テスト到達不可: draft.Validate 成功後は、非空IDと同じ検証条件を使うため。
+		return nil, nil, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	password, hasPassword, err := u.passwordForSave(draft, editing)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := u.repository.CheckConnection(ctx, profile, password); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeConnectionFailed, err)
+	}
+
+	nextProfiles := replaceProfile(profiles, profile, editing)
+	if !hasPassword {
+		if err := u.repository.SaveProfiles(nextProfiles, activeID); err != nil {
+			return nil, nil, apperr.Wrap(apperr.CodeConfigSaveFailed, err)
+		}
+
+		return nextProfiles, activeID, nil
+	}
+
+	previousCredential, previousCredentialFound, err := u.previousCredential(profileID, editing)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := u.repository.SetCredential(profileID, password); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeCredentialSaveFailed, err)
+	}
+	if err := u.repository.SaveProfiles(nextProfiles, activeID); err != nil {
+		if recoveryErr := u.restoreCredential(profileID, previousCredential, previousCredentialFound); recoveryErr != nil {
+			return nil, nil, apperr.Wrap(apperr.CodeConsistencyRecoveryFailed, recoveryErr)
+		}
+
+		return nil, nil, apperr.Wrap(apperr.CodeConfigSaveFailed, err)
+	}
+
+	return nextProfiles, activeID, nil
 }
 
-// 資格情報リポジトリ
-type CredentialRepository interface {
-	GetCredential(string) (credential string, found bool, err error)
+// 保存用パスワード取得
+func (u *AppUseCase) passwordForSave(draft domain.ProfileDraft, editing bool) (string, bool, error) {
+	if draft.Password != "" {
+		return draft.Password, true, nil
+	}
+	if !editing {
+		return "", false, nil
+	}
+
+	credential, found, err := u.repository.GetCredential(draft.ID)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("credential not found")
+		}
+
+		return "", false, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+
+	return credential, false, nil
 }
 
-// データベース接続リポジトリ
-type DatabaseConnectionRepository interface {
-	CheckConnection(context.Context, domain.Profile, string) error
+// 保存前資格情報取得
+func (u *AppUseCase) previousCredential(profileID string, editing bool) (string, bool, error) {
+	if !editing {
+		return "", false, nil
+	}
+
+	credential, found, err := u.repository.GetCredential(profileID)
+	if err != nil {
+		return "", false, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+
+	return credential, found, nil
+}
+
+// 資格情報復旧
+func (u *AppUseCase) restoreCredential(profileID, credential string, found bool) error {
+	if found {
+		return u.repository.SetCredential(profileID, credential)
+	}
+
+	return u.repository.DeleteCredential(profileID)
+}
+
+// プロファイル存在判定
+func containsProfile(profiles []domain.Profile, profileID string) bool {
+	for _, profile := range profiles {
+		if profile.ID == profileID {
+			return true
+		}
+	}
+
+	return false
+}
+
+// プロファイル置換
+func replaceProfile(profiles []domain.Profile, profile domain.Profile, editing bool) []domain.Profile {
+	next := append([]domain.Profile(nil), profiles...)
+	if !editing {
+		return append(next, profile)
+	}
+
+	for index, current := range next {
+		if current.ID == profile.ID {
+			next[index] = profile
+
+			return next
+		}
+	}
+
+	return next
 }
 
 // 接続プロファイル読込
 func (u *AppUseCase) LoadProfiles() ([]domain.Profile, *string, error) {
-	profiles, activeID, err := u.profiles.LoadProfiles()
+	profiles, activeID, err := u.repository.LoadProfiles()
 	if err != nil {
 		return nil, nil, err
 	}
