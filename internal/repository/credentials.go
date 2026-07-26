@@ -22,3 +22,21 @@ func (r *AppRepository) GetCredential(profileID string) (string, bool, error) {
 
 	return "", false, apperr.Wrap(apperr.CodeSecureStoreFailed, err)
 }
+
+// 資格情報保存
+func (r *AppRepository) SetCredential(profileID, credential string) error {
+	if err := r.credentials.Set(keyringServiceName, profileID, credential); err != nil {
+		return apperr.Wrap(apperr.CodeSecureStoreFailed, err)
+	}
+
+	return nil
+}
+
+// 資格情報削除
+func (r *AppRepository) DeleteCredential(profileID string) error {
+	if err := r.credentials.Delete(keyringServiceName, profileID); err != nil && !stderrors.Is(err, keyring.ErrNotFound) {
+		return apperr.Wrap(apperr.CodeSecureStoreFailed, err)
+	}
+
+	return nil
+}
