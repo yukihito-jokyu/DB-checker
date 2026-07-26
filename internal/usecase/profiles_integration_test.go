@@ -24,7 +24,8 @@ type integrationCredentialRepository struct {
 
 type integrationAppRepository struct {
 	*repository.AppRepository
-	credentials *integrationCredentialRepository
+	credentials         *integrationCredentialRepository
+	connectionPasswords []string
 }
 
 // 結合テスト用資格情報取得
@@ -40,6 +41,13 @@ func (r *integrationAppRepository) SetCredential(profileID, credential string) e
 // 結合テスト用資格情報削除
 func (r *integrationAppRepository) DeleteCredential(profileID string) error {
 	return r.credentials.DeleteCredential(profileID)
+}
+
+// 結合テスト用接続確認
+func (r *integrationAppRepository) CheckConnection(ctx context.Context, profile domain.Profile, password string) error {
+	r.connectionPasswords = append(r.connectionPasswords, password)
+
+	return r.AppRepository.CheckConnection(ctx, profile, password)
 }
 
 // 結合テスト用資格情報取得
@@ -155,6 +163,134 @@ func TestAppUseCaseSaveConnectionProfileIntegration(t *testing.T) {
 					}
 					if got := len(credentialRepository.credentials); got != tt.wantCredentialCount {
 						t.Errorf("credentials = %d, want %d", got, tt.wantCredentialCount)
+					}
+				})
+			}
+		})
+	}
+}
+
+// 接続プロファイル切替結合検証
+func TestAppUseCaseActivateConnectionProfileIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			tests := []struct {
+				name                 string
+				removeCredential     bool
+				wantErrorCode        apperr.Code
+				wantReturnedProfiles int
+				wantConnectionPass   string
+				wantPersistedTarget  bool
+			}{
+				{
+					name:                 "登録済み資格情報で接続しアクティブプロファイルを切り替える",
+					wantReturnedProfiles: 2,
+					wantPersistedTarget:  true,
+				},
+				{
+					name:               "資格情報未登録時は空パスワードで接続を試みアクティブ状態を維持する",
+					removeCredential:   true,
+					wantErrorCode:      apperr.CodeConnectionFailed,
+					wantConnectionPass: "",
+				},
+			}
+
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					store := config.NewStore(t.TempDir())
+					if err := store.Initialize(); err != nil {
+						t.Fatalf("Store.Initialize() error = %v", err)
+					}
+					credentialRepository := &integrationCredentialRepository{credentials: map[string]string{}}
+					appRepository := &integrationAppRepository{
+						AppRepository: repository.NewAppRepository(store),
+						credentials:   credentialRepository,
+					}
+					useCase := NewAppUseCase(appRepository)
+					activeDraft := integrationProfileDraft(t, target)
+					activeDraft.Name = "Integration Active " + string(target.Kind)
+					targetDraft := integrationProfileDraft(t, target)
+					targetDraft.Name = "Integration Target " + string(target.Kind)
+
+					activeProfiles, _, err := useCase.SaveConnectionProfile(context.Background(), activeDraft)
+					if err != nil {
+						t.Fatalf("SaveConnectionProfile() active profile error = %v", err)
+					}
+					if got := len(activeProfiles); got != 1 {
+						t.Fatalf("SaveConnectionProfile() active profiles = %d, want 1", got)
+					}
+					profiles, _, err := useCase.SaveConnectionProfile(context.Background(), targetDraft)
+					if err != nil {
+						t.Fatalf("SaveConnectionProfile() target profile error = %v", err)
+					}
+					if got := len(profiles); got != 2 {
+						t.Fatalf("SaveConnectionProfile() target profiles = %d, want 2", got)
+					}
+					activeProfileID := activeProfiles[0].ID
+					targetProfileID := profiles[1].ID
+					if err := appRepository.SaveProfiles(profiles, &activeProfileID); err != nil {
+						t.Fatalf("SaveProfiles() initial active profile error = %v", err)
+					}
+					if tt.removeCredential {
+						delete(credentialRepository.credentials, targetProfileID)
+					}
+					appRepository.connectionPasswords = nil
+
+					returnedProfiles, returnedActiveID, err := useCase.ActivateConnectionProfile(context.Background(), targetProfileID)
+					if gotCode := saveErrorCode(err); gotCode != tt.wantErrorCode {
+						t.Errorf("ActivateConnectionProfile() error code = %q, want %q", gotCode, tt.wantErrorCode)
+					}
+					if tt.wantErrorCode == "" && err != nil {
+						t.Fatalf("ActivateConnectionProfile() error = %v", err)
+					}
+					if tt.wantErrorCode != "" && err == nil {
+						t.Fatal("ActivateConnectionProfile() error = nil, want non-nil")
+					}
+					if got := len(returnedProfiles); got != tt.wantReturnedProfiles {
+						t.Errorf("ActivateConnectionProfile() profiles = %d, want %d", got, tt.wantReturnedProfiles)
+					}
+					if tt.wantPersistedTarget {
+						if returnedActiveID == nil {
+							t.Fatal("ActivateConnectionProfile() active ID = nil, want target profile ID")
+						}
+						if got := *returnedActiveID; got != targetProfileID {
+							t.Errorf("ActivateConnectionProfile() active ID = %q, want %q", got, targetProfileID)
+						}
+					} else if returnedActiveID != nil {
+						t.Errorf("ActivateConnectionProfile() active ID = %q, want nil", *returnedActiveID)
+					}
+					if got := len(appRepository.connectionPasswords); got != 1 {
+						t.Fatalf("CheckConnection() calls = %d, want 1", got)
+					}
+					wantConnectionPass := targetDraft.Password
+					if tt.removeCredential {
+						wantConnectionPass = tt.wantConnectionPass
+					}
+					if got := appRepository.connectionPasswords[0]; got != wantConnectionPass {
+						t.Errorf("CheckConnection() password = %q, want %q", got, wantConnectionPass)
+					}
+
+					persistedProfiles, persistedActiveID, err := useCase.LoadProfiles()
+					if err != nil {
+						t.Fatalf("LoadProfiles() error = %v", err)
+					}
+					if got := len(persistedProfiles); got != 2 {
+						t.Errorf("LoadProfiles() profiles = %d, want 2", got)
+					}
+					wantPersistedID := activeProfileID
+					if tt.wantPersistedTarget {
+						wantPersistedID = targetProfileID
+					}
+					if persistedActiveID == nil {
+						t.Fatalf("LoadProfiles() active ID = nil, want %q", wantPersistedID)
+					}
+					if got := *persistedActiveID; got != wantPersistedID {
+						t.Errorf("LoadProfiles() active ID = %q, want %q", got, wantPersistedID)
 					}
 				})
 			}

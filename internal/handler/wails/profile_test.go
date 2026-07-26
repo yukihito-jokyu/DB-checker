@@ -340,6 +340,174 @@ func TestAppHandlerSaveConnectionProfile(t *testing.T) {
 	}
 }
 
+// アクティブ接続プロファイル切替成功応答
+func TestAppHandlerActivateConnectionProfile(t *testing.T) {
+	tests := []struct {
+		name         string
+		profileID    string
+		profiles     []domain.Profile
+		activeID     *string
+		credential   string
+		found        bool
+		wantData     *ConnectionProfilesResponse
+		wantGetIDs   []string
+		wantSaveCall int
+		wantCheck    int
+		wantPassword string
+	}{
+		{
+			name:      "保存済み資格情報で切り替え結果を返す",
+			profileID: "profile-2",
+			profiles: []domain.Profile{
+				newTestProfile(t, "profile-1", domain.DBTypePostgres),
+				newTestProfile(t, "profile-2", domain.DBTypeMySQL),
+			},
+			activeID:   stringPointer("profile-1"),
+			credential: "secret-password",
+			found:      true,
+			wantData: &ConnectionProfilesResponse{
+				Profiles: []ProfileResponse{
+					{
+						ID:       "profile-1",
+						Name:     "Local profile-1",
+						DBType:   "postgres",
+						Host:     "localhost",
+						Port:     5432,
+						Database: "app",
+						Schema:   "public",
+						User:     "user",
+					},
+					{
+						ID:       "profile-2",
+						Name:     "Local profile-2",
+						DBType:   "mysql",
+						Host:     "localhost",
+						Port:     5432,
+						Database: "app",
+						Schema:   "",
+						User:     "user",
+					},
+				},
+				ActiveConnectionProfileID: stringPointer("profile-2"),
+			},
+			wantGetIDs:   []string{"profile-2"},
+			wantSaveCall: 1,
+			wantCheck:    1,
+			wantPassword: "secret-password",
+		},
+		{
+			name:      "使用中のプロファイルは確認せずに返す",
+			profileID: "profile-1",
+			profiles:  []domain.Profile{newTestProfile(t, "profile-1", domain.DBTypePostgres)},
+			activeID:  stringPointer("profile-1"),
+			wantData: &ConnectionProfilesResponse{
+				Profiles: []ProfileResponse{
+					{
+						ID:       "profile-1",
+						Name:     "Local profile-1",
+						DBType:   "postgres",
+						Host:     "localhost",
+						Port:     5432,
+						Database: "app",
+						Schema:   "public",
+						User:     "user",
+					},
+				},
+				ActiveConnectionProfileID: stringPointer("profile-1"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := &connectionProfileRepositoryStub{
+				profiles:        tt.profiles,
+				activeID:        tt.activeID,
+				credential:      tt.credential,
+				credentialFound: tt.found,
+			}
+			handler := newTestAppHandler(t, config.NewStore(t.TempDir()), repository)
+
+			got := handler.ActivateConnectionProfile(tt.profileID)
+
+			if got.Error != nil {
+				t.Fatalf("ActivateConnectionProfile() Error = %#v, want nil", got.Error)
+			}
+			if got.Data == nil {
+				t.Fatal("ActivateConnectionProfile() Data = nil, want non-nil")
+			}
+			if !reflect.DeepEqual(*got.Data, *tt.wantData) {
+				t.Errorf("ActivateConnectionProfile() Data = %#v, want %#v", *got.Data, *tt.wantData)
+			}
+			if !reflect.DeepEqual(repository.credentialIDs, tt.wantGetIDs) {
+				t.Errorf("GetCredential() profile IDs = %#v, want %#v", repository.credentialIDs, tt.wantGetIDs)
+			}
+			if gotCalls := repository.saveCalls; gotCalls != tt.wantSaveCall {
+				t.Errorf("SaveProfiles() calls = %d, want %d", gotCalls, tt.wantSaveCall)
+			}
+			if gotCalls := repository.connectionCalls; gotCalls != tt.wantCheck {
+				t.Errorf("CheckConnection() calls = %d, want %d", gotCalls, tt.wantCheck)
+			}
+			if gotPassword := repository.password; gotPassword != tt.wantPassword {
+				t.Errorf("CheckConnection() password = %q, want %q", gotPassword, tt.wantPassword)
+			}
+		})
+	}
+}
+
+// 接続切替失敗ログの秘密情報非出力
+func TestAppHandlerActivateConnectionProfileDoesNotLogConnectionErrorCause(t *testing.T) {
+	tests := []struct {
+		name              string
+		connectionError   error
+		wantErrorCode     apperr.Code
+		wantLogSubstring  string
+		avoidLogSubstring string
+	}{
+		{
+			name:              "接続失敗の原因と資格情報をログへ出力しない",
+			connectionError:   errors.New("connection failed: password=secret-password"),
+			wantErrorCode:     apperr.CodeConnectionFailed,
+			wantLogSubstring:  "code=CONNECTION_FAILED",
+			avoidLogSubstring: "secret-password",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			logger := applogger.NewWithWriter(&buffer, slog.LevelDebug)
+			profileRepository := &connectionProfileRepositoryStub{
+				profiles: []domain.Profile{
+					newTestProfile(t, "profile-1", domain.DBTypePostgres),
+				},
+				credential:      "secret-password",
+				credentialFound: true,
+				connectionErr:   tt.connectionError,
+			}
+			appUseCase := usecase.NewAppUseCase(profileRepository)
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+
+			result := handler.ActivateConnectionProfile("profile-1")
+
+			if result.Error == nil {
+				t.Fatal("ActivateConnectionProfile() Error = nil, want non-nil")
+			}
+			if gotCode := result.Error.Code; gotCode != string(tt.wantErrorCode) {
+				t.Errorf("ActivateConnectionProfile() Error.Code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+
+			output := buffer.String()
+			if !strings.Contains(output, tt.wantLogSubstring) {
+				t.Errorf("log output = %q, want substring %q", output, tt.wantLogSubstring)
+			}
+			if strings.Contains(output, tt.avoidLogSubstring) {
+				t.Errorf("log output = %q, want no substring %q", output, tt.avoidLogSubstring)
+			}
+		})
+	}
+}
+
 // 接続失敗ログの秘密情報非出力
 func TestAppHandlerSaveConnectionProfileDoesNotLogConnectionErrorCause(t *testing.T) {
 	tests := []struct {

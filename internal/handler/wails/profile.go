@@ -49,6 +49,23 @@ func (h *AppHandler) SaveConnectionProfile(request SaveConnectionProfileRequest)
 	})
 }
 
+// アクティブ接続プロファイル切替
+func (h *AppHandler) ActivateConnectionProfile(profileID string) Response[ConnectionProfilesResponse] {
+	h.logger.Info(context.Background(), "connection profile activation requested", slog.String("operation", "connection_profile_activate"))
+
+	profiles, activeID, err := h.appUseCase.ActivateConnectionProfile(context.Background(), profileID)
+	if err != nil {
+		h.logConnectionProfileActivationFailure(err)
+
+		return Fail[ConnectionProfilesResponse](err)
+	}
+
+	return OK(ConnectionProfilesResponse{
+		Profiles:                  toProfileResponses(profiles),
+		ActiveConnectionProfileID: activeID,
+	})
+}
+
 // 接続プロファイル保存失敗ログ出力
 func (h *AppHandler) logConnectionProfileSaveFailure(err error) {
 	code := apperr.CodeUnexpected
@@ -57,6 +74,16 @@ func (h *AppHandler) logConnectionProfileSaveFailure(err error) {
 	}
 
 	h.logger.ErrorCode(context.Background(), "connection profile save failed", string(code), slog.String("operation", "connection_profile_save"))
+}
+
+// アクティブ接続プロファイル切替失敗ログ出力
+func (h *AppHandler) logConnectionProfileActivationFailure(err error) {
+	code := apperr.CodeUnexpected
+	if appErr := apperr.As(err); appErr != nil {
+		code = appErr.Code
+	}
+
+	h.logger.ErrorCode(context.Background(), "connection profile activation failed", string(code), slog.String("operation", "connection_profile_activate"))
 }
 
 // 接続プロファイル一覧取得

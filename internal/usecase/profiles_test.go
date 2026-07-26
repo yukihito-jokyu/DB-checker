@@ -32,8 +32,14 @@ func (s *appRepositoryStub) SaveProfiles(profiles []domain.Profile, activeID *st
 	s.saveCalls++
 	s.savedProfiles = profiles
 	s.savedActiveID = activeID
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 
-	return s.saveErr
+	s.profiles = profiles
+	s.activeID = activeID
+
+	return nil
 }
 
 // 資格情報取得再現
@@ -355,6 +361,183 @@ func TestAppUseCaseSaveConnectionProfile(t *testing.T) {
 			}
 			if tt.wantErrorCode == "" && len(profiles) != tt.wantProfileCount {
 				t.Errorf("SaveConnectionProfile() profiles = %d, want %d", len(profiles), tt.wantProfileCount)
+			}
+		})
+	}
+}
+
+// アクティブ接続プロファイル切替
+func TestAppUseCaseActivateConnectionProfile(t *testing.T) {
+	first := newSaveTestProfile(t, "profile-1")
+	second := newSaveTestProfile(t, "profile-2")
+	repositoryErr := errors.New("repository error")
+	connectionErr := errors.New("connection error")
+	tests := []struct {
+		name              string
+		profileID         string
+		profiles          []domain.Profile
+		activeID          *string
+		credentials       credentialState
+		repositoryLoadErr error
+		repositorySaveErr error
+		connectionErr     error
+		wantErrorCode     apperr.Code
+		wantCause         error
+		wantGetIDs        []string
+		wantSaveCalls     int
+		wantConnection    int
+		wantPassword      string
+		wantActiveID      *string
+		wantStoredActive  *string
+	}{
+		{
+			name:          "空のプロファイルIDを未存在として返す",
+			profiles:      []domain.Profile{first},
+			wantErrorCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:          "存在しないプロファイルを未存在として返す",
+			profileID:     "missing",
+			profiles:      []domain.Profile{first},
+			wantErrorCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:              "プロファイル読み込み失敗をそのまま返す",
+			profileID:         "profile-1",
+			repositoryLoadErr: repositoryErr,
+			wantCause:         repositoryErr,
+		},
+		{
+			name:             "同じアクティブプロファイルは接続確認せずに返す",
+			profileID:        "profile-1",
+			profiles:         []domain.Profile{first, second},
+			activeID:         stringPointer("profile-1"),
+			wantActiveID:     stringPointer("profile-1"),
+			wantStoredActive: stringPointer("profile-1"),
+			wantSaveCalls:    0,
+			wantConnection:   0,
+		},
+		{
+			name:             "保存済み資格情報で接続確認して切り替える",
+			profileID:        "profile-2",
+			profiles:         []domain.Profile{first, second},
+			activeID:         stringPointer("profile-1"),
+			credentials:      credentialState{credential: "secret", found: true},
+			wantGetIDs:       []string{"profile-2"},
+			wantSaveCalls:    1,
+			wantConnection:   1,
+			wantPassword:     "secret",
+			wantActiveID:     stringPointer("profile-2"),
+			wantStoredActive: stringPointer("profile-2"),
+		},
+		{
+			name:             "未登録資格情報では空パスワードで切り替える",
+			profileID:        "profile-2",
+			profiles:         []domain.Profile{first, second},
+			activeID:         stringPointer("profile-1"),
+			wantGetIDs:       []string{"profile-2"},
+			wantSaveCalls:    1,
+			wantConnection:   1,
+			wantPassword:     "",
+			wantActiveID:     stringPointer("profile-2"),
+			wantStoredActive: stringPointer("profile-2"),
+		},
+		{
+			name:             "資格情報取得失敗時はアクティブIDを変更しない",
+			profileID:        "profile-2",
+			profiles:         []domain.Profile{first, second},
+			activeID:         stringPointer("profile-1"),
+			credentials:      credentialState{getErr: repositoryErr},
+			wantErrorCode:    apperr.CodeCredentialUnavailable,
+			wantCause:        repositoryErr,
+			wantGetIDs:       []string{"profile-2"},
+			wantStoredActive: stringPointer("profile-1"),
+		},
+		{
+			name:             "接続確認失敗時はアクティブIDを変更しない",
+			profileID:        "profile-2",
+			profiles:         []domain.Profile{first, second},
+			activeID:         stringPointer("profile-1"),
+			credentials:      credentialState{credential: "secret", found: true},
+			connectionErr:    connectionErr,
+			wantErrorCode:    apperr.CodeConnectionFailed,
+			wantCause:        connectionErr,
+			wantGetIDs:       []string{"profile-2"},
+			wantConnection:   1,
+			wantPassword:     "secret",
+			wantStoredActive: stringPointer("profile-1"),
+		},
+		{
+			name:              "設定保存失敗時はアクティブIDを変更しない",
+			profileID:         "profile-2",
+			profiles:          []domain.Profile{first, second},
+			activeID:          stringPointer("profile-1"),
+			credentials:       credentialState{credential: "secret", found: true},
+			repositorySaveErr: repositoryErr,
+			wantErrorCode:     apperr.CodeConfigSaveFailed,
+			wantCause:         repositoryErr,
+			wantGetIDs:        []string{"profile-2"},
+			wantSaveCalls:     1,
+			wantConnection:    1,
+			wantPassword:      "secret",
+			wantStoredActive:  stringPointer("profile-1"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			credentials := tt.credentials
+			connection := &connectionState{err: tt.connectionErr}
+			repository := &appRepositoryStub{
+				profiles:    tt.profiles,
+				activeID:    tt.activeID,
+				loadErr:     tt.repositoryLoadErr,
+				saveErr:     tt.repositorySaveErr,
+				credentials: &credentials,
+				connection:  connection,
+			}
+
+			profiles, activeID, err := NewAppUseCase(repository).ActivateConnectionProfile(context.Background(), tt.profileID)
+
+			if gotCode := saveErrorCode(err); gotCode != tt.wantErrorCode {
+				t.Errorf("ActivateConnectionProfile() error code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Errorf("ActivateConnectionProfile() error = %v, want cause %v", err, tt.wantCause)
+			}
+			if !reflect.DeepEqual(credentials.getIDs, tt.wantGetIDs) {
+				t.Errorf("GetCredential() profile IDs = %#v, want %#v", credentials.getIDs, tt.wantGetIDs)
+			}
+			if got := repository.saveCalls; got != tt.wantSaveCalls {
+				t.Errorf("SaveProfiles() calls = %d, want %d", got, tt.wantSaveCalls)
+			}
+			if got := connection.calls; got != tt.wantConnection {
+				t.Errorf("CheckConnection() calls = %d, want %d", got, tt.wantConnection)
+			}
+			if got := connection.password; got != tt.wantPassword {
+				t.Errorf("CheckConnection() password = %q, want %q", got, tt.wantPassword)
+			}
+			if !reflect.DeepEqual(repository.activeID, tt.wantStoredActive) {
+				t.Errorf("repository active ID = %#v, want %#v", repository.activeID, tt.wantStoredActive)
+			}
+			if tt.wantErrorCode != "" || tt.wantCause != nil {
+				if profiles != nil {
+					t.Errorf("ActivateConnectionProfile() profiles = %#v, want nil", profiles)
+				}
+				if activeID != nil {
+					t.Errorf("ActivateConnectionProfile() active ID = %#v, want nil", activeID)
+				}
+
+				return
+			}
+			if !reflect.DeepEqual(profiles, tt.profiles) {
+				t.Errorf("ActivateConnectionProfile() profiles = %#v, want %#v", profiles, tt.profiles)
+			}
+			if !reflect.DeepEqual(activeID, tt.wantActiveID) {
+				t.Errorf("ActivateConnectionProfile() active ID = %#v, want %#v", activeID, tt.wantActiveID)
+			}
+			if tt.wantSaveCalls == 1 && !reflect.DeepEqual(repository.savedActiveID, tt.wantActiveID) {
+				t.Errorf("SaveProfiles() active ID = %#v, want %#v", repository.savedActiveID, tt.wantActiveID)
 			}
 		})
 	}

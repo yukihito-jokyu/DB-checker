@@ -13,11 +13,21 @@ import (
 )
 
 type connectionProfileRepositoryStub struct {
-	profiles      []domain.Profile
-	activeID      *string
-	err           error
-	calls         int
-	connectionErr error
+	profiles        []domain.Profile
+	activeID        *string
+	err             error
+	calls           int
+	saveErr         error
+	saveCalls       int
+	savedProfiles   []domain.Profile
+	savedActiveID   *string
+	credential      string
+	credentialFound bool
+	credentialErr   error
+	credentialIDs   []string
+	connectionErr   error
+	connectionCalls int
+	password        string
 }
 
 // 接続プロファイル読込再現
@@ -28,13 +38,19 @@ func (s *connectionProfileRepositoryStub) LoadProfiles() ([]domain.Profile, *str
 }
 
 // 接続プロファイル保存再現
-func (s *connectionProfileRepositoryStub) SaveProfiles([]domain.Profile, *string) error {
-	return nil
+func (s *connectionProfileRepositoryStub) SaveProfiles(profiles []domain.Profile, activeID *string) error {
+	s.saveCalls++
+	s.savedProfiles = profiles
+	s.savedActiveID = activeID
+
+	return s.saveErr
 }
 
 // 資格情報取得再現
-func (s *connectionProfileRepositoryStub) GetCredential(string) (string, bool, error) {
-	return "", false, nil
+func (s *connectionProfileRepositoryStub) GetCredential(profileID string) (string, bool, error) {
+	s.credentialIDs = append(s.credentialIDs, profileID)
+
+	return s.credential, s.credentialFound, s.credentialErr
 }
 
 // 資格情報設定再現
@@ -48,7 +64,10 @@ func (s *connectionProfileRepositoryStub) DeleteCredential(string) error {
 }
 
 // データベース接続確認再現
-func (s *connectionProfileRepositoryStub) CheckConnection(context.Context, domain.Profile, string) error {
+func (s *connectionProfileRepositoryStub) CheckConnection(_ context.Context, _ domain.Profile, password string) error {
+	s.connectionCalls++
+	s.password = password
+
 	return s.connectionErr
 }
 
