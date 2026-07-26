@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 
+	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
@@ -29,4 +30,31 @@ func (r *AppRepository) LoadProfiles() ([]domain.Profile, *string, error) {
 	}
 
 	return profiles, result.Config.ActiveConnectionProfileID, nil
+}
+
+// 接続プロファイル保存
+func (r *AppRepository) SaveProfiles(profiles []domain.Profile, activeID *string) error {
+	result, err := r.store.Load()
+	if err != nil {
+		return err
+	}
+
+	storedProfiles := make([]config.ConnectionProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		storedProfiles = append(storedProfiles, config.ConnectionProfile{
+			ID:       profile.ID,
+			Name:     profile.Name,
+			DBType:   string(profile.DBType),
+			Host:     profile.Host,
+			Port:     profile.Port,
+			Database: profile.Database,
+			Schema:   profile.Schema,
+			User:     profile.User,
+		})
+	}
+
+	result.Config.ConnectionProfiles = storedProfiles
+	result.Config.ActiveConnectionProfileID = activeID
+
+	return r.store.Save(result.Config)
 }
