@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -9,15 +10,60 @@ import (
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
 
-type connectionProfileRepositoryStub struct {
-	profiles []domain.Profile
-	activeID *string
-	err      error
+type appRepositoryStub struct {
+	profiles      []domain.Profile
+	activeID      *string
+	loadErr       error
+	saveErr       error
+	savedProfiles []domain.Profile
+	savedActiveID *string
+	saveCalls     int
+	credentials   *credentialState
+	connection    *connectionState
 }
 
 // 接続プロファイル読込再現
-func (s connectionProfileRepositoryStub) LoadProfiles() ([]domain.Profile, *string, error) {
-	return s.profiles, s.activeID, s.err
+func (s *appRepositoryStub) LoadProfiles() ([]domain.Profile, *string, error) {
+	return s.profiles, s.activeID, s.loadErr
+}
+
+// 接続プロファイル保存再現
+func (s *appRepositoryStub) SaveProfiles(profiles []domain.Profile, activeID *string) error {
+	s.saveCalls++
+	s.savedProfiles = profiles
+	s.savedActiveID = activeID
+
+	return s.saveErr
+}
+
+// 資格情報取得再現
+func (s *appRepositoryStub) GetCredential(profileID string) (string, bool, error) {
+	s.credentials.getIDs = append(s.credentials.getIDs, profileID)
+
+	return s.credentials.credential, s.credentials.found, s.credentials.getErr
+}
+
+// 資格情報設定再現
+func (s *appRepositoryStub) SetCredential(_ string, credential string) error {
+	s.credentials.setValues = append(s.credentials.setValues, credential)
+
+	return s.credentials.setErr
+}
+
+// 資格情報削除再現
+func (s *appRepositoryStub) DeleteCredential(profileID string) error {
+	s.credentials.deleteIDs = append(s.credentials.deleteIDs, profileID)
+
+	return s.credentials.deleteErr
+}
+
+// データベース接続確認再現
+func (s *appRepositoryStub) CheckConnection(_ context.Context, profile domain.Profile, password string) error {
+	s.connection.calls++
+	s.connection.profile = profile
+	s.connection.password = password
+
+	return s.connection.err
 }
 
 // 接続プロファイル読込
@@ -30,7 +76,7 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 	repositoryErr := errors.New("repository error")
 	tests := []struct {
 		name          string
-		repository    connectionProfileRepositoryStub
+		repository    appRepositoryStub
 		wantProfiles  []domain.Profile
 		wantActiveID  *string
 		wantFound     bool
@@ -39,7 +85,7 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 	}{
 		{
 			name: "プロファイルを返す",
-			repository: connectionProfileRepositoryStub{
+			repository: appRepositoryStub{
 				profiles: []domain.Profile{profile},
 				activeID: stringPointer("profile-1"),
 			},
@@ -48,22 +94,22 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 		},
 		{
 			name: "アクティブプロファイル未選択を返す",
-			repository: connectionProfileRepositoryStub{
+			repository: appRepositoryStub{
 				profiles: []domain.Profile{profile},
 			},
 			wantProfiles: []domain.Profile{profile},
 		},
 		{
 			name: "リポジトリエラーを返す",
-			repository: connectionProfileRepositoryStub{
-				err: repositoryErr,
+			repository: appRepositoryStub{
+				loadErr: repositoryErr,
 			},
 			wantFound: true,
 			wantCause: repositoryErr,
 		},
 		{
 			name: "存在しないアクティブIDを設定エラーとして返す",
-			repository: connectionProfileRepositoryStub{
+			repository: appRepositoryStub{
 				profiles: []domain.Profile{profile},
 				activeID: stringPointer("missing"),
 			},
@@ -74,7 +120,8 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			useCase := NewAppUseCase(tt.repository, nil)
+			repository := tt.repository
+			useCase := NewAppUseCase(&repository)
 
 			gotProfiles, gotActiveID, err := useCase.LoadProfiles()
 
@@ -83,6 +130,9 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 			}
 			if !reflect.DeepEqual(gotActiveID, tt.wantActiveID) {
 				t.Errorf("LoadProfiles() active ID = %#v, want %#v", gotActiveID, tt.wantActiveID)
+			}
+			if repository.saveCalls != 0 {
+				t.Errorf("LoadProfiles() SaveProfiles() calls = %d, want 0", repository.saveCalls)
 			}
 			if gotFound := err != nil; gotFound != tt.wantFound {
 				t.Fatalf("LoadProfiles() error found = %v, want %v", gotFound, tt.wantFound)
@@ -103,4 +153,402 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 // 文字列ポインタ生成
 func stringPointer(value string) *string {
 	return &value
+}
+
+type credentialState struct {
+	credential string
+	found      bool
+	getErr     error
+	setErr     error
+	deleteErr  error
+	getIDs     []string
+	setValues  []string
+	deleteIDs  []string
+}
+
+type connectionState struct {
+	err      error
+	calls    int
+	profile  domain.Profile
+	password string
+}
+
+// 接続プロファイル保存
+func TestAppUseCaseSaveConnectionProfile(t *testing.T) {
+	existing := newSaveTestProfile(t, "profile-1")
+	repositoryErr := errors.New("repository error")
+	connectionErr := errors.New("connection error")
+	tests := []struct {
+		name              string
+		draft             domain.ProfileDraft
+		profiles          []domain.Profile
+		credentials       credentialState
+		repositoryLoadErr error
+		repositorySaveErr error
+		connectionErr     error
+		wantErrorCode     apperr.Code
+		wantCause         error
+		wantSaveCalls     int
+		wantConnection    int
+		wantPassword      string
+		wantSetValues     []string
+		wantDeleteCount   int
+		wantProfileCount  int
+	}{
+		{
+			name:          "不正な下書きを入力エラーとして返す",
+			draft:         domain.ProfileDraft{},
+			wantErrorCode: apperr.CodeValidationFailed,
+		},
+		{
+			name:              "プロファイル読み込み失敗をそのまま返す",
+			draft:             newSaveTestDraft(t, "", "new-password"),
+			repositoryLoadErr: repositoryErr,
+			wantCause:         repositoryErr,
+		},
+		{
+			name:             "新規プロファイルを資格情報とともに保存する",
+			draft:            newSaveTestDraft(t, "", "new-password"),
+			wantSaveCalls:    1,
+			wantConnection:   1,
+			wantPassword:     "new-password",
+			wantSetValues:    []string{"new-password"},
+			wantProfileCount: 1,
+		},
+		{
+			name:             "新規プロファイルをパスワードなしで保存する",
+			draft:            newSaveTestDraft(t, "", ""),
+			wantSaveCalls:    1,
+			wantConnection:   1,
+			wantProfileCount: 1,
+		},
+		{
+			name:              "パスワードなしの設定保存失敗を返す",
+			draft:             newSaveTestDraft(t, "", ""),
+			repositorySaveErr: repositoryErr,
+			wantErrorCode:     apperr.CodeConfigSaveFailed,
+			wantSaveCalls:     1,
+			wantConnection:    1,
+		},
+		{
+			name:             "既存資格情報で編集する",
+			draft:            newSaveTestDraft(t, "profile-1", ""),
+			profiles:         []domain.Profile{existing},
+			credentials:      credentialState{credential: "old-password", found: true},
+			wantSaveCalls:    1,
+			wantConnection:   1,
+			wantPassword:     "old-password",
+			wantProfileCount: 1,
+		},
+		{
+			name:          "存在しないプロファイルの編集を拒否する",
+			draft:         newSaveTestDraft(t, "missing", "new-password"),
+			profiles:      []domain.Profile{existing},
+			wantErrorCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:          "既存資格情報がない編集を拒否する",
+			draft:         newSaveTestDraft(t, "profile-1", ""),
+			profiles:      []domain.Profile{existing},
+			wantErrorCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:           "接続失敗時は保存しない",
+			draft:          newSaveTestDraft(t, "", "new-password"),
+			connectionErr:  connectionErr,
+			wantErrorCode:  apperr.CodeConnectionFailed,
+			wantConnection: 1,
+			wantPassword:   "new-password",
+		},
+		{
+			name:           "保存前資格情報の取得失敗を返す",
+			draft:          newSaveTestDraft(t, "profile-1", "new-password"),
+			profiles:       []domain.Profile{existing},
+			credentials:    credentialState{getErr: repositoryErr},
+			wantErrorCode:  apperr.CodeCredentialUnavailable,
+			wantConnection: 1,
+			wantPassword:   "new-password",
+		},
+		{
+			name:             "資格情報保存失敗時は設定を変更せず復旧しない",
+			draft:            newSaveTestDraft(t, "", "new-password"),
+			credentials:      credentialState{setErr: repositoryErr},
+			wantErrorCode:    apperr.CodeCredentialSaveFailed,
+			wantConnection:   1,
+			wantPassword:     "new-password",
+			wantSetValues:    []string{"new-password"},
+			wantDeleteCount:  0,
+			wantProfileCount: 0,
+		},
+		{
+			name:              "設定保存失敗時は新規資格情報を削除する",
+			draft:             newSaveTestDraft(t, "", "new-password"),
+			repositorySaveErr: repositoryErr,
+			wantErrorCode:     apperr.CodeConfigSaveFailed,
+			wantSaveCalls:     1,
+			wantConnection:    1,
+			wantPassword:      "new-password",
+			wantSetValues:     []string{"new-password"},
+			wantDeleteCount:   1,
+		},
+		{
+			name:              "設定保存失敗時は既存資格情報を復旧する",
+			draft:             newSaveTestDraft(t, "profile-1", "new-password"),
+			profiles:          []domain.Profile{existing},
+			credentials:       credentialState{credential: "old-password", found: true},
+			repositorySaveErr: repositoryErr,
+			wantErrorCode:     apperr.CodeConfigSaveFailed,
+			wantSaveCalls:     1,
+			wantConnection:    1,
+			wantPassword:      "new-password",
+			wantSetValues:     []string{"new-password", "old-password"},
+		},
+		{
+			name:              "資格情報復旧失敗を返す",
+			draft:             newSaveTestDraft(t, "", "new-password"),
+			repositorySaveErr: repositoryErr,
+			credentials:       credentialState{deleteErr: repositoryErr},
+			wantErrorCode:     apperr.CodeConsistencyRecoveryFailed,
+			wantSaveCalls:     1,
+			wantConnection:    1,
+			wantPassword:      "new-password",
+			wantSetValues:     []string{"new-password"},
+			wantDeleteCount:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			credentials := tt.credentials
+			connection := &connectionState{err: tt.connectionErr}
+			repository := &appRepositoryStub{
+				profiles:    tt.profiles,
+				loadErr:     tt.repositoryLoadErr,
+				saveErr:     tt.repositorySaveErr,
+				credentials: &credentials,
+				connection:  connection,
+			}
+			useCase := NewAppUseCase(repository)
+
+			profiles, _, err := useCase.SaveConnectionProfile(context.Background(), tt.draft)
+
+			if gotCode := saveErrorCode(err); gotCode != tt.wantErrorCode {
+				t.Errorf("SaveConnectionProfile() error code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Errorf("SaveConnectionProfile() error = %v, want cause %v", err, tt.wantCause)
+			}
+			if got := repository.saveCalls; got != tt.wantSaveCalls {
+				t.Errorf("SaveProfiles() calls = %d, want %d", got, tt.wantSaveCalls)
+			}
+			if got := connection.calls; got != tt.wantConnection {
+				t.Errorf("CheckConnection() calls = %d, want %d", got, tt.wantConnection)
+			}
+			if got := connection.password; got != tt.wantPassword {
+				t.Errorf("CheckConnection() password = %q, want %q", got, tt.wantPassword)
+			}
+			if !equalStrings(credentials.setValues, tt.wantSetValues) {
+				t.Errorf("SetCredential() values = %#v, want %#v", credentials.setValues, tt.wantSetValues)
+			}
+			if got := len(credentials.deleteIDs); got != tt.wantDeleteCount {
+				t.Errorf("DeleteCredential() calls = %d, want %d", got, tt.wantDeleteCount)
+			}
+			if tt.wantErrorCode == "" && len(profiles) != tt.wantProfileCount {
+				t.Errorf("SaveConnectionProfile() profiles = %d, want %d", len(profiles), tt.wantProfileCount)
+			}
+		})
+	}
+}
+
+// 保存前資格情報取得検証
+func TestAppUseCasePreviousCredential(t *testing.T) {
+	repositoryErr := errors.New("repository error")
+	tests := []struct {
+		name           string
+		profileID      string
+		editing        bool
+		credentials    credentialState
+		wantCredential string
+		wantFound      bool
+		wantErrorCode  apperr.Code
+		wantGetIDs     []string
+	}{
+		{
+			name:      "新規作成では資格情報を取得しない",
+			profileID: "profile-1",
+		},
+		{
+			name:      "既存の資格情報を返す",
+			profileID: "profile-1",
+			editing:   true,
+			credentials: credentialState{
+				credential: "secret",
+				found:      true,
+			},
+			wantCredential: "secret",
+			wantFound:      true,
+			wantGetIDs:     []string{"profile-1"},
+		},
+		{
+			name:      "未登録の資格情報を返す",
+			profileID: "profile-1",
+			editing:   true,
+			wantGetIDs: []string{
+				"profile-1",
+			},
+		},
+		{
+			name:      "資格情報取得失敗を利用不可エラーとして返す",
+			profileID: "profile-1",
+			editing:   true,
+			credentials: credentialState{
+				getErr: repositoryErr,
+			},
+			wantErrorCode: apperr.CodeCredentialUnavailable,
+			wantGetIDs: []string{
+				"profile-1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			credentials := tt.credentials
+			repository := &appRepositoryStub{
+				credentials: &credentials,
+			}
+
+			credential, found, err := NewAppUseCase(repository).previousCredential(tt.profileID, tt.editing)
+
+			if got := credential; got != tt.wantCredential {
+				t.Errorf("previousCredential() credential = %q, want %q", got, tt.wantCredential)
+			}
+			if got := found; got != tt.wantFound {
+				t.Errorf("previousCredential() found = %v, want %v", got, tt.wantFound)
+			}
+			if gotCode := saveErrorCode(err); gotCode != tt.wantErrorCode {
+				t.Errorf("previousCredential() error code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+			if !reflect.DeepEqual(credentials.getIDs, tt.wantGetIDs) {
+				t.Errorf("GetCredential() profile IDs = %#v, want %#v", credentials.getIDs, tt.wantGetIDs)
+			}
+		})
+	}
+}
+
+// プロファイル置換検証
+func TestReplaceProfile(t *testing.T) {
+	first := newSaveTestProfile(t, "profile-1")
+	second := newSaveTestProfile(t, "profile-2")
+	replacement := domain.Profile{
+		ID:       "profile-1",
+		Name:     "Updated DB",
+		DBType:   domain.DBTypePostgres,
+		Host:     "db.example.com",
+		Port:     5433,
+		Database: "updated",
+		Schema:   "public",
+		User:     "admin",
+	}
+	tests := []struct {
+		name     string
+		profiles []domain.Profile
+		profile  domain.Profile
+		editing  bool
+		want     []domain.Profile
+	}{
+		{
+			name:     "新規プロファイルを末尾に追加する",
+			profiles: []domain.Profile{first},
+			profile:  second,
+			want: []domain.Profile{
+				first,
+				second,
+			},
+		},
+		{
+			name:     "既存プロファイルを置き換える",
+			profiles: []domain.Profile{first, second},
+			profile:  replacement,
+			editing:  true,
+			want: []domain.Profile{
+				replacement,
+				second,
+			},
+		},
+		{
+			name:     "存在しないプロファイルを編集しても変更しない",
+			profiles: []domain.Profile{first},
+			profile:  second,
+			editing:  true,
+			want: []domain.Profile{
+				first,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := append([]domain.Profile(nil), tt.profiles...)
+			got := replaceProfile(tt.profiles, tt.profile, tt.editing)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("replaceProfile() = %#v, want %#v", got, tt.want)
+			}
+			if !reflect.DeepEqual(tt.profiles, original) {
+				t.Errorf("replaceProfile() input = %#v, want %#v", tt.profiles, original)
+			}
+		})
+	}
+}
+
+// 保存用テストプロファイル生成
+func newSaveTestProfile(t *testing.T, id string) domain.Profile {
+	t.Helper()
+
+	profile, err := domain.NewProfile(id, "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+
+	return profile
+}
+
+// 保存用テスト下書き生成
+func newSaveTestDraft(t *testing.T, id, password string) domain.ProfileDraft {
+	t.Helper()
+
+	draft, err := domain.NewProfileDraft(id, "New DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user", password)
+	if err != nil {
+		t.Fatalf("NewProfileDraft() error = %v", err)
+	}
+
+	return draft
+}
+
+// 保存エラーコード取得
+func saveErrorCode(err error) apperr.Code {
+	if err == nil {
+		return ""
+	}
+
+	if appErr := apperr.As(err); appErr != nil {
+		return appErr.Code
+	}
+
+	return ""
+}
+
+// 文字列スライス比較
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+
+	return true
 }
