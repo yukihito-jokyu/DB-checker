@@ -1,6 +1,7 @@
 package wails
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"testing"
@@ -12,10 +13,11 @@ import (
 )
 
 type connectionProfileRepositoryStub struct {
-	profiles []domain.Profile
-	activeID *string
-	err      error
-	calls    int
+	profiles      []domain.Profile
+	activeID      *string
+	err           error
+	calls         int
+	connectionErr error
 }
 
 // 接続プロファイル読込再現
@@ -25,12 +27,37 @@ func (s *connectionProfileRepositoryStub) LoadProfiles() ([]domain.Profile, *str
 	return s.profiles, s.activeID, s.err
 }
 
+// 接続プロファイル保存再現
+func (s *connectionProfileRepositoryStub) SaveProfiles([]domain.Profile, *string) error {
+	return nil
+}
+
+// 資格情報取得再現
+func (s *connectionProfileRepositoryStub) GetCredential(string) (string, bool, error) {
+	return "", false, nil
+}
+
+// 資格情報設定再現
+func (s *connectionProfileRepositoryStub) SetCredential(string, string) error {
+	return nil
+}
+
+// 資格情報削除再現
+func (s *connectionProfileRepositoryStub) DeleteCredential(string) error {
+	return nil
+}
+
+// データベース接続確認再現
+func (s *connectionProfileRepositoryStub) CheckConnection(context.Context, domain.Profile, string) error {
+	return s.connectionErr
+}
+
 // テスト用ハンドラー生成
 func newTestAppHandler(t *testing.T, store *config.Store, repository *connectionProfileRepositoryStub) *AppHandler {
 	t.Helper()
 
 	logger := applogger.NewWithWriter(io.Discard, slog.LevelDebug)
-	appUseCase := usecase.NewAppUseCase(repository, nil)
+	appUseCase := usecase.NewAppUseCase(repository)
 
 	return NewAppHandler(logger, store, appUseCase)
 }
