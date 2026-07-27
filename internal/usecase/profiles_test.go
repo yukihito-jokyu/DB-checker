@@ -15,8 +15,10 @@ type appRepositoryStub struct {
 	activeID      *string
 	loadErr       error
 	saveErr       error
+	saveErrs      []error
 	savedProfiles []domain.Profile
 	savedActiveID *string
+	savedHistory  []savedProfileState
 	saveCalls     int
 	credentials   *credentialState
 	connection    *connectionState
@@ -32,6 +34,13 @@ func (s *appRepositoryStub) SaveProfiles(profiles []domain.Profile, activeID *st
 	s.saveCalls++
 	s.savedProfiles = profiles
 	s.savedActiveID = activeID
+	s.savedHistory = append(s.savedHistory, savedProfileState{
+		profiles: profiles,
+		activeID: activeID,
+	})
+	if len(s.saveErrs) >= s.saveCalls && s.saveErrs[s.saveCalls-1] != nil {
+		return s.saveErrs[s.saveCalls-1]
+	}
 	if s.saveErr != nil {
 		return s.saveErr
 	}
@@ -170,6 +179,11 @@ type credentialState struct {
 	getIDs     []string
 	setValues  []string
 	deleteIDs  []string
+}
+
+type savedProfileState struct {
+	profiles []domain.Profile
+	activeID *string
 }
 
 type connectionState struct {
@@ -538,6 +552,224 @@ func TestAppUseCaseActivateConnectionProfile(t *testing.T) {
 			}
 			if tt.wantSaveCalls == 1 && !reflect.DeepEqual(repository.savedActiveID, tt.wantActiveID) {
 				t.Errorf("SaveProfiles() active ID = %#v, want %#v", repository.savedActiveID, tt.wantActiveID)
+			}
+		})
+	}
+}
+
+// 接続プロファイル削除
+func TestAppUseCaseDeleteConnectionProfile(t *testing.T) {
+	first := newSaveTestProfile(t, "profile-1")
+	second := newSaveTestProfile(t, "profile-2")
+	repositoryErr := errors.New("repository error")
+	credentialErr := errors.New("credential store failure: password=secret-password")
+	tests := []struct {
+		name                 string
+		profileID            string
+		profiles             []domain.Profile
+		activeID             *string
+		repositoryLoadErr    error
+		repositorySaveErrs   []error
+		credentialDeleteErr  error
+		wantErrorCode        apperr.Code
+		wantCause            error
+		wantProfiles         []domain.Profile
+		wantActiveID         *string
+		wantStoredProfiles   []domain.Profile
+		wantStoredActiveID   *string
+		wantSaveCalls        int
+		wantCredentialDelete []string
+		wantConnectionCalls  int
+		wantSavedHistory     []savedProfileState
+	}{
+		{
+			name:          "存在しないプロファイルを未存在として返す",
+			profileID:     "missing",
+			profiles:      []domain.Profile{first},
+			wantErrorCode: apperr.CodeProfileNotFound,
+			wantStoredProfiles: []domain.Profile{
+				first,
+			},
+		},
+		{
+			name:              "プロファイル読み込み失敗をそのまま返す",
+			profileID:         "profile-1",
+			repositoryLoadErr: repositoryErr,
+			wantCause:         repositoryErr,
+		},
+		{
+			name:      "非アクティブプロファイルと資格情報を削除する",
+			profileID: "profile-1",
+			profiles:  []domain.Profile{first, second},
+			activeID:  stringPointer("profile-2"),
+			wantProfiles: []domain.Profile{
+				second,
+			},
+			wantActiveID: stringPointer("profile-2"),
+			wantStoredProfiles: []domain.Profile{
+				second,
+			},
+			wantStoredActiveID:   stringPointer("profile-2"),
+			wantSaveCalls:        1,
+			wantCredentialDelete: []string{"profile-1"},
+			wantSavedHistory: []savedProfileState{
+				{
+					profiles: []domain.Profile{second},
+					activeID: stringPointer("profile-2"),
+				},
+			},
+		},
+		{
+			name:      "アクティブプロファイルを削除して未選択にする",
+			profileID: "profile-1",
+			profiles: []domain.Profile{
+				first,
+				second,
+			},
+			activeID: stringPointer("profile-1"),
+			wantProfiles: []domain.Profile{
+				second,
+			},
+			wantStoredProfiles: []domain.Profile{
+				second,
+			},
+			wantSaveCalls:        1,
+			wantCredentialDelete: []string{"profile-1"},
+			wantSavedHistory: []savedProfileState{
+				{
+					profiles: []domain.Profile{second},
+					activeID: nil,
+				},
+			},
+		},
+		{
+			name:      "設定保存失敗時は資格情報を削除しない",
+			profileID: "profile-1",
+			profiles:  []domain.Profile{first},
+			repositorySaveErrs: []error{
+				repositoryErr,
+			},
+			wantErrorCode:      apperr.CodeConfigSaveFailed,
+			wantCause:          repositoryErr,
+			wantStoredProfiles: []domain.Profile{first},
+			wantSaveCalls:      1,
+			wantSavedHistory: []savedProfileState{
+				{
+					profiles: []domain.Profile{},
+					activeID: nil,
+				},
+			},
+		},
+		{
+			name:                "資格情報削除失敗時は設定を復旧する",
+			profileID:           "profile-1",
+			profiles:            []domain.Profile{first, second},
+			activeID:            stringPointer("profile-1"),
+			credentialDeleteErr: credentialErr,
+			wantErrorCode:       apperr.CodeCredentialDeleteFailed,
+			wantCause:           credentialErr,
+			wantStoredProfiles: []domain.Profile{
+				first,
+				second,
+			},
+			wantStoredActiveID:   stringPointer("profile-1"),
+			wantSaveCalls:        2,
+			wantCredentialDelete: []string{"profile-1"},
+			wantSavedHistory: []savedProfileState{
+				{
+					profiles: []domain.Profile{second},
+					activeID: nil,
+				},
+				{
+					profiles: []domain.Profile{first, second},
+					activeID: stringPointer("profile-1"),
+				},
+			},
+		},
+		{
+			name:      "設定復旧失敗時は整合性復旧エラーを返す",
+			profileID: "profile-1",
+			profiles:  []domain.Profile{first},
+			activeID:  stringPointer("profile-1"),
+			repositorySaveErrs: []error{
+				nil,
+				repositoryErr,
+			},
+			credentialDeleteErr: credentialErr,
+			wantErrorCode:       apperr.CodeConsistencyRecoveryFailed,
+			wantCause:           repositoryErr,
+			wantStoredProfiles:  []domain.Profile{},
+			wantSaveCalls:       2,
+			wantCredentialDelete: []string{
+				"profile-1",
+			},
+			wantSavedHistory: []savedProfileState{
+				{
+					profiles: []domain.Profile{},
+					activeID: nil,
+				},
+				{
+					profiles: []domain.Profile{first},
+					activeID: stringPointer("profile-1"),
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			credentials := credentialState{deleteErr: tt.credentialDeleteErr}
+			connection := &connectionState{}
+			repository := &appRepositoryStub{
+				profiles:    tt.profiles,
+				activeID:    tt.activeID,
+				loadErr:     tt.repositoryLoadErr,
+				saveErrs:    tt.repositorySaveErrs,
+				credentials: &credentials,
+				connection:  connection,
+			}
+
+			profiles, activeID, err := NewAppUseCase(repository).DeleteConnectionProfile(tt.profileID)
+
+			if gotCode := saveErrorCode(err); gotCode != tt.wantErrorCode {
+				t.Errorf("DeleteConnectionProfile() error code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Errorf("DeleteConnectionProfile() error = %v, want cause %v", err, tt.wantCause)
+			}
+			if got := repository.saveCalls; got != tt.wantSaveCalls {
+				t.Errorf("SaveProfiles() calls = %d, want %d", got, tt.wantSaveCalls)
+			}
+			if !reflect.DeepEqual(credentials.deleteIDs, tt.wantCredentialDelete) {
+				t.Errorf("DeleteCredential() profile IDs = %#v, want %#v", credentials.deleteIDs, tt.wantCredentialDelete)
+			}
+			if got := connection.calls; got != tt.wantConnectionCalls {
+				t.Errorf("CheckConnection() calls = %d, want %d", got, tt.wantConnectionCalls)
+			}
+			if !reflect.DeepEqual(repository.profiles, tt.wantStoredProfiles) {
+				t.Errorf("repository profiles = %#v, want %#v", repository.profiles, tt.wantStoredProfiles)
+			}
+			if !reflect.DeepEqual(repository.activeID, tt.wantStoredActiveID) {
+				t.Errorf("repository active ID = %#v, want %#v", repository.activeID, tt.wantStoredActiveID)
+			}
+			if !reflect.DeepEqual(repository.savedHistory, tt.wantSavedHistory) {
+				t.Errorf("SaveProfiles() history = %#v, want %#v", repository.savedHistory, tt.wantSavedHistory)
+			}
+			if tt.wantErrorCode != "" || tt.wantCause != nil {
+				if profiles != nil {
+					t.Errorf("DeleteConnectionProfile() profiles = %#v, want nil", profiles)
+				}
+				if activeID != nil {
+					t.Errorf("DeleteConnectionProfile() active ID = %#v, want nil", activeID)
+				}
+
+				return
+			}
+			if !reflect.DeepEqual(profiles, tt.wantProfiles) {
+				t.Errorf("DeleteConnectionProfile() profiles = %#v, want %#v", profiles, tt.wantProfiles)
+			}
+			if !reflect.DeepEqual(activeID, tt.wantActiveID) {
+				t.Errorf("DeleteConnectionProfile() active ID = %#v, want %#v", activeID, tt.wantActiveID)
 			}
 		})
 	}
