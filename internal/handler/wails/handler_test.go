@@ -25,6 +25,8 @@ type connectionProfileRepositoryStub struct {
 	credentialFound bool
 	credentialErr   error
 	credentialIDs   []string
+	deleteErr       error
+	deleteIDs       []string
 	connectionErr   error
 	connectionCalls int
 	password        string
@@ -59,8 +61,10 @@ func (s *connectionProfileRepositoryStub) SetCredential(string, string) error {
 }
 
 // 資格情報削除再現
-func (s *connectionProfileRepositoryStub) DeleteCredential(string) error {
-	return nil
+func (s *connectionProfileRepositoryStub) DeleteCredential(profileID string) error {
+	s.deleteIDs = append(s.deleteIDs, profileID)
+
+	return s.deleteErr
 }
 
 // データベース接続確認再現
