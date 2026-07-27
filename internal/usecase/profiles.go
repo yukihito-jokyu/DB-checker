@@ -105,6 +105,36 @@ func (u *AppUseCase) ActivateConnectionProfile(ctx context.Context, profileID st
 	return profiles, &nextActiveID, nil
 }
 
+// 接続プロファイル削除
+func (u *AppUseCase) DeleteConnectionProfile(profileID string) ([]domain.Profile, *string, error) {
+	profiles, activeID, err := u.LoadProfiles()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !containsProfile(profiles, profileID) {
+		return nil, nil, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	nextProfiles := removeProfile(profiles, profileID)
+	nextActiveID := activeID
+	if activeID != nil && *activeID == profileID {
+		nextActiveID = nil
+	}
+	if err := u.repository.SaveProfiles(nextProfiles, nextActiveID); err != nil {
+		return nil, nil, apperr.Wrap(apperr.CodeConfigSaveFailed, err)
+	}
+
+	if err := u.repository.DeleteCredential(profileID); err != nil {
+		if recoveryErr := u.repository.SaveProfiles(profiles, activeID); recoveryErr != nil {
+			return nil, nil, apperr.Wrap(apperr.CodeConsistencyRecoveryFailed, recoveryErr)
+		}
+
+		return nil, nil, apperr.Wrap(apperr.CodeCredentialDeleteFailed, err)
+	}
+
+	return nextProfiles, nextActiveID, nil
+}
+
 // 保存用パスワード取得
 func (u *AppUseCase) passwordForSave(draft domain.ProfileDraft, editing bool) (string, bool, error) {
 	if draft.Password != "" {
@@ -183,6 +213,18 @@ func replaceProfile(profiles []domain.Profile, profile domain.Profile, editing b
 			next[index] = profile
 
 			return next
+		}
+	}
+
+	return next
+}
+
+// プロファイル除外
+func removeProfile(profiles []domain.Profile, profileID string) []domain.Profile {
+	next := make([]domain.Profile, 0, len(profiles)-1)
+	for _, profile := range profiles {
+		if profile.ID != profileID {
+			next = append(next, profile)
 		}
 	}
 
