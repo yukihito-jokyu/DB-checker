@@ -31,14 +31,15 @@ func (h *AppHandler) SaveConnectionProfile(request SaveConnectionProfileRequest)
 
 	draft, err := domain.NewProfileDraft(request.ID, request.Name, domain.DBType(request.DBType), request.Host, request.Port, request.Database, request.Schema, request.User, request.Password)
 	if err != nil {
-		h.logConnectionProfileSaveFailure(apperr.Wrap(apperr.CodeValidationFailed, err))
+		appErr := apperr.Wrap(apperr.CodeValidationFailed, err)
+		h.logFailureWithCode("connection profile save failed", "connection_profile_save", appErr)
 
-		return Fail[ConnectionProfilesResponse](apperr.Wrap(apperr.CodeValidationFailed, err))
+		return Fail[ConnectionProfilesResponse](appErr)
 	}
 
 	profiles, activeID, err := h.appUseCase.SaveConnectionProfile(context.Background(), draft)
 	if err != nil {
-		h.logConnectionProfileSaveFailure(err)
+		h.logFailureWithCode("connection profile save failed", "connection_profile_save", err)
 
 		return Fail[ConnectionProfilesResponse](err)
 	}
@@ -55,7 +56,7 @@ func (h *AppHandler) ActivateConnectionProfile(profileID string) Response[Connec
 
 	profiles, activeID, err := h.appUseCase.ActivateConnectionProfile(context.Background(), profileID)
 	if err != nil {
-		h.logConnectionProfileActivationFailure(err)
+		h.logFailureWithCode("connection profile activation failed", "connection_profile_activate", err)
 
 		return Fail[ConnectionProfilesResponse](err)
 	}
@@ -66,24 +67,31 @@ func (h *AppHandler) ActivateConnectionProfile(profileID string) Response[Connec
 	})
 }
 
-// 接続プロファイル保存失敗ログ出力
-func (h *AppHandler) logConnectionProfileSaveFailure(err error) {
-	code := apperr.CodeUnexpected
-	if appErr := apperr.As(err); appErr != nil {
-		code = appErr.Code
+// 接続プロファイル削除
+func (h *AppHandler) DeleteConnectionProfile(profileID string) Response[ConnectionProfilesResponse] {
+	h.logger.Info(context.Background(), "connection profile deletion requested", slog.String("operation", "connection_profile_delete"))
+
+	profiles, activeID, err := h.appUseCase.DeleteConnectionProfile(profileID)
+	if err != nil {
+		h.logFailureWithCode("connection profile deletion failed", "connection_profile_delete", err)
+
+		return Fail[ConnectionProfilesResponse](err)
 	}
 
-	h.logger.ErrorCode(context.Background(), "connection profile save failed", string(code), slog.String("operation", "connection_profile_save"))
+	return OK(ConnectionProfilesResponse{
+		Profiles:                  toProfileResponses(profiles),
+		ActiveConnectionProfileID: activeID,
+	})
 }
 
-// アクティブ接続プロファイル切替失敗ログ出力
-func (h *AppHandler) logConnectionProfileActivationFailure(err error) {
+// エラーコード付き失敗ログ出力
+func (h *AppHandler) logFailureWithCode(message, operation string, err error) {
 	code := apperr.CodeUnexpected
 	if appErr := apperr.As(err); appErr != nil {
 		code = appErr.Code
 	}
 
-	h.logger.ErrorCode(context.Background(), "connection profile activation failed", string(code), slog.String("operation", "connection_profile_activate"))
+	h.logger.ErrorCode(context.Background(), message, string(code), slog.String("operation", operation))
 }
 
 // 接続プロファイル一覧取得
