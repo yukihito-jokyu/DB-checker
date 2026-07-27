@@ -14,7 +14,8 @@ const (
 	CodeProfileNotFound           Code = "PROFILE_NOT_FOUND"
 	CodeCredentialUnavailable     Code = "CREDENTIAL_UNAVAILABLE" // #nosec G101 -- エラーコードであり資格情報ではない。
 	CodeConnectionFailed          Code = "CONNECTION_FAILED"
-	CodeCredentialSaveFailed      Code = "CREDENTIAL_SAVE_FAILED" // #nosec G101 -- エラーコードであり資格情報ではない。
+	CodeCredentialSaveFailed      Code = "CREDENTIAL_SAVE_FAILED"   // #nosec G101 -- エラーコードであり資格情報ではない。
+	CodeCredentialDeleteFailed    Code = "CREDENTIAL_DELETE_FAILED" // #nosec G101 -- エラーコードであり資格情報ではない。
 	CodeConfigSaveFailed          Code = "CONFIG_SAVE_FAILED"
 	CodeConsistencyRecoveryFailed Code = "CONSISTENCY_RECOVERY_FAILED"
 	CodeSchemaLoadFailed          Code = "SCHEMA_LOAD_FAILED"
@@ -42,6 +43,7 @@ var defaultMessages = map[Code]message{ // #nosec G101 -- 利用者向けエラ�
 	CodeCredentialUnavailable:     "既存の資格情報を利用できません",
 	CodeConnectionFailed:          "接続確認に失敗しました",
 	CodeCredentialSaveFailed:      "資格情報の保存に失敗しました",
+	CodeCredentialDeleteFailed:    "資格情報の削除に失敗しました",
 	CodeConfigSaveFailed:          "接続プロファイルの保存に失敗しました",
 	CodeConsistencyRecoveryFailed: "保存状態の復旧に失敗しました。再試行してください",
 	CodeSchemaLoadFailed:          "スキーマ取得に失敗しました",
