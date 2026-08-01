@@ -29,7 +29,12 @@ func (h *AppHandler) CheckProfiles() Response[ProfileCheckResponse] {
 func (h *AppHandler) SaveConnectionProfile(request SaveConnectionProfileRequest) Response[ConnectionProfilesResponse] {
 	h.logger.Info(context.Background(), "connection profile save requested", slog.String("operation", "connection_profile_save"))
 
-	draft, err := domain.NewProfileDraft(request.ID, request.Name, domain.DBType(request.DBType), request.Host, request.Port, request.Database, request.Schema, request.User, request.Password)
+	schema := ""
+	if request.Schema != nil {
+		schema = *request.Schema
+	}
+
+	draft, err := domain.NewProfileDraft(request.ID, request.Name, domain.DBType(request.DBType), request.Host, request.Port, request.Database, schema, request.User, request.Password)
 	if err != nil {
 		appErr := apperr.Wrap(apperr.CodeValidationFailed, err)
 		h.logFailureWithCode("connection profile save failed", "connection_profile_save", appErr)

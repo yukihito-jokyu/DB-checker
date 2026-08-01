@@ -7,20 +7,27 @@ import (
 
 // アプリケーションリポジトリ
 type AppRepository struct {
-	store       *config.Store
-	credentials credentialStore
+	store             *config.Store
+	credentials       credentialStore
+	connectionChecker connectionChecker
 }
 
 // アプリケーションリポジトリ生成
 func NewAppRepository(store *config.Store) *AppRepository {
-	return newAppRepository(store, systemCredentialStore{})
+	return newAppRepository(store, systemCredentialStore{}, databaseConnectionChecker{})
 }
 
 // テスト用リポジトリ生成
-func newAppRepository(store *config.Store, credentials credentialStore) *AppRepository {
+func newAppRepository(store *config.Store, credentials credentialStore, checkers ...connectionChecker) *AppRepository {
+	connectionChecker := connectionChecker(databaseConnectionChecker{})
+	if len(checkers) > 0 {
+		connectionChecker = checkers[0]
+	}
+
 	return &AppRepository{
-		store:       store,
-		credentials: credentials,
+		store:             store,
+		credentials:       credentials,
+		connectionChecker: connectionChecker,
 	}
 }
 

@@ -15,8 +15,19 @@ import (
 
 const connectionTimeout = 3 * time.Second
 
+type connectionChecker interface {
+	Check(context.Context, domain.Profile, string) error
+}
+
+type databaseConnectionChecker struct{}
+
 // データベース接続確認
 func (r *AppRepository) CheckConnection(ctx context.Context, profile domain.Profile, password string) error {
+	return r.connectionChecker.Check(ctx, profile, password)
+}
+
+// 実DB接続確認
+func (databaseConnectionChecker) Check(ctx context.Context, profile domain.Profile, password string) error {
 	driverName, dsn := connectionDSN(profile, password)
 	database, err := sql.Open(driverName, dsn)
 	if err != nil {
