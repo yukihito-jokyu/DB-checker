@@ -8,10 +8,9 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/yukihito-jokyu/DB-checker/internal/config"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	wailshandler "github.com/yukihito-jokyu/DB-checker/internal/handler/wails"
 	applogger "github.com/yukihito-jokyu/DB-checker/internal/logger"
-	"github.com/yukihito-jokyu/DB-checker/internal/repository"
 	"github.com/yukihito-jokyu/DB-checker/internal/usecase"
 )
 
@@ -22,7 +21,7 @@ var assets embed.FS
 func main() {
 	app := NewApp()
 	logger := applogger.New(slog.LevelInfo)
-	configStore, err := config.NewDefaultStore()
+	configStore, appRepository, err := newApplicationDependencies()
 	if err != nil {
 		logger.Error(context.Background(), "config store initialization failed", err)
 
@@ -33,7 +32,6 @@ func main() {
 
 		return
 	}
-	appRepository := repository.NewAppRepository(configStore)
 	appUseCase := usecase.NewAppUseCase(appRepository)
 	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase)
 
@@ -41,6 +39,9 @@ func main() {
 		Title:  "DB-checker",
 		Width:  1024,
 		Height: 768,
+		Mac: &mac.Options{
+			DisableZoom: false,
+		},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

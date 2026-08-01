@@ -1,17 +1,17 @@
 import { create } from "zustand";
 
 type AppStoreState = {
-	initialized: boolean;
-	markInitialized: () => void;
-	reset: () => void;
+  initialized: boolean;
+  markInitialized: () => void;
+  reset: () => void;
 };
 
 const initialState = {
-	initialized: false,
+  initialized: false,
 };
 
 export const useAppStore = create<AppStoreState>((set) => ({
-	...initialState,
-	markInitialized: () => set({ initialized: true }),
-	reset: () => set(initialState),
+  ...initialState,
+  markInitialized: () => set({ initialized: true }),
+  reset: () => set(initialState),
 }));

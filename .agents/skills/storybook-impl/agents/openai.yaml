@@ -1,0 +1,4 @@
+interface:
+  display_name: "Storybook Implementation"
+  short_description: "DB-checkerのStorybookとUIテストを実装する"
+  default_prompt: "Use $storybook-impl to add or update Storybook stories and component tests for DB-checker."
