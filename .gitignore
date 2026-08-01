@@ -14,3 +14,11 @@ frontend/dist/*
 
 # coverage
 coverage/
+
+# Storybook
+frontend/*storybook.log
+frontend/storybook-static/
+
+# Playwright E2E
+frontend/playwright-report/
+frontend/test-results/

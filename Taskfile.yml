@@ -93,6 +93,30 @@ tasks:
     cmds:
       - npm run format
 
+  frontend:storybook:
+    desc: Storybook 開発サーバーを起動する
+    dir: frontend
+    cmds:
+      - npm run storybook
+
+  frontend:storybook:build:
+    desc: Storybook の静的成果物をビルドする
+    dir: frontend
+    cmds:
+      - npm run build-storybook
+
+  frontend:storybook:test:
+    desc: Storybook の描画・操作・アクセシビリティテストを実行する
+    dir: frontend
+    cmds:
+      - npm run test-storybook
+
+  frontend:e2e:
+    desc: Wails 経由のPlaywright E2Eテストを実行する
+    dir: frontend
+    cmds:
+      - npm run test:e2e
+
   dev:
     desc: Wails 開発サーバーを起動する
     cmds:
