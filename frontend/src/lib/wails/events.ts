@@ -6,10 +6,10 @@ export type WailsEventUnsubscribe = () => void;
 
 /** Wails Events の購読を開始し、解除関数を返す。 */
 export function subscribeWailsEvent<TPayload = unknown>(
-	eventName: string,
-	handler: WailsEventHandler<TPayload>,
+  eventName: string,
+  handler: WailsEventHandler<TPayload>,
 ): WailsEventUnsubscribe {
-	return EventsOn(eventName, (payload: TPayload) => {
-		handler(payload);
-	});
+  return EventsOn(eventName, (payload: TPayload) => {
+    handler(payload);
+  });
 }

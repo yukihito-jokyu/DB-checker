@@ -1,13 +1,14 @@
 import { GetStatus } from "@wails/go/wails/AppHandler";
+
 import { unwrapResponse } from "@/lib/appResponse";
 
 export type AppStatus = {
-	ready: boolean;
-	version: string;
+  ready: boolean;
+  version: string;
 };
 
 /** アプリ全体の疎通状態を Wails binding から取得する。 */
 export async function getAppStatus(): Promise<AppStatus> {
-	const response = await GetStatus();
-	return unwrapResponse(response);
+  const response = await GetStatus();
+  return unwrapResponse(response);
 }
