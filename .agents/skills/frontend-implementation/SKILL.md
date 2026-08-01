@@ -60,7 +60,7 @@ Go 側との契約は `internal/handler/wails` と `frontend/wailsjs` の境界�
 
 ## Verification
 
-- TypeScript / Vite の変更後は `rtk npm run build` を `frontend` で実行する。
+- TypeScript / Vite の変更後は `npm run build` を `frontend` で実行する。
 - lint や formatter のスクリプトが追加されている場合は、該当スクリプトも実行する。
 - Wails binding 変更を含む場合は、生成コード更新後に Go テストも実行する。
 - 画面挙動が重要な変更では、可能なら dev server または Playwright で表示確認する。
