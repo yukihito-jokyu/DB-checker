@@ -21,7 +21,7 @@ var assets embed.FS
 func main() {
 	app := NewApp()
 	logger := applogger.New(slog.LevelInfo)
-	configStore, appRepository, err := newApplicationDependencies()
+	configStore, err := newApplicationConfigStore()
 	if err != nil {
 		logger.Error(context.Background(), "config store initialization failed", err)
 
@@ -32,8 +32,10 @@ func main() {
 
 		return
 	}
+	appRepository := newApplicationRepository(configStore)
 	appUseCase := usecase.NewAppUseCase(appRepository)
-	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase)
+	inspectionUseCase := usecase.NewInspectionUseCase(appRepository)
+	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase, inspectionUseCase)
 
 	err = wails.Run(&options.App{
 		Title:  "DB-checker",

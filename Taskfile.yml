@@ -11,6 +11,9 @@ tasks:
     desc: Wails の frontend binding を生成する
     cmds:
       - wails generate module
+      # Wails v2.10.1 は models.ts の空行にタブを出力し、runtime を実行可能にコピーするため正規化する。
+      - perl -pi -e 's/[ \t]+$//' frontend/wailsjs/go/models.ts
+      - chmod 644 frontend/wailsjs/runtime/package.json frontend/wailsjs/runtime/runtime.d.ts frontend/wailsjs/runtime/runtime.js
 
   test:
     desc: Go のテストを実行する
@@ -60,6 +63,7 @@ tasks:
     desc: 実 DB を使う Go 結合テストを実行する
     env:
       DB_CHECKER_INTEGRATION_MYSQL_DSN: db_checker:db_checker@tcp(127.0.0.1:13306)/db_checker_integration?parseTime=true
+      DB_CHECKER_INTEGRATION_MYSQL_ADMIN_DSN: root:db_checker_root@tcp(127.0.0.1:13306)/?parseTime=true
       DB_CHECKER_INTEGRATION_POSTGRES_DSN: postgres://db_checker:db_checker@127.0.0.1:15432/db_checker_integration?sslmode=disable
     cmds:
       - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test -tags=integration ./...
