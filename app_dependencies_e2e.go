@@ -8,19 +8,21 @@ import (
 
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	"github.com/yukihito-jokyu/DB-checker/internal/repository"
-	"github.com/yukihito-jokyu/DB-checker/internal/usecase"
 )
 
 const e2eConfigDirEnv = "DB_CHECKER_E2E_CONFIG_DIR"
 
-// E2E依存生成
-func newApplicationDependencies() (*config.Store, usecase.AppRepository, error) {
+// E2E設定ストア生成
+func newApplicationConfigStore() (*config.Store, error) {
 	configDir := os.Getenv(e2eConfigDirEnv)
 	if configDir == "" {
-		return nil, nil, fmt.Errorf("%s is required", e2eConfigDirEnv)
+		return nil, fmt.Errorf("%s is required", e2eConfigDirEnv)
 	}
 
-	configStore := config.NewStore(configDir)
+	return config.NewStore(configDir), nil
+}
 
-	return configStore, repository.NewE2EAppRepository(configStore), nil
+// E2Eリポジトリ生成
+func newApplicationRepository(configStore *config.Store) *repository.AppRepository {
+	return repository.NewE2EAppRepository(configStore)
 }

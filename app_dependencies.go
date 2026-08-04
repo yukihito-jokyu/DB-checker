@@ -5,15 +5,14 @@ package main
 import (
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	"github.com/yukihito-jokyu/DB-checker/internal/repository"
-	"github.com/yukihito-jokyu/DB-checker/internal/usecase"
 )
 
-// 本番依存生成
-func newApplicationDependencies() (*config.Store, usecase.AppRepository, error) {
-	configStore, err := config.NewDefaultStore()
-	if err != nil {
-		return nil, nil, err
-	}
+// 本番設定ストア生成
+func newApplicationConfigStore() (*config.Store, error) {
+	return config.NewDefaultStore()
+}
 
-	return configStore, repository.NewAppRepository(configStore), nil
+// 本番リポジトリ生成
+func newApplicationRepository(configStore *config.Store) *repository.AppRepository {
+	return repository.NewAppRepository(configStore)
 }

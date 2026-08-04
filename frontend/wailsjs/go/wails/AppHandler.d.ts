@@ -10,6 +10,8 @@ export function DeleteConnectionProfile(arg1:string):Promise<wails.Response_gith
 
 export function GetConfig():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigResponse_>;
 
+export function GetDatabaseSchema():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_DatabaseSchemaResponse_>;
+
 export function GetStatus():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusResponse_>;
 
 export function ListConnectionProfiles():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;

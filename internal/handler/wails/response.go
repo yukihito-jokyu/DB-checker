@@ -51,6 +51,43 @@ type SaveConnectionProfileRequest struct {
 	Password string  `json:"password"`
 }
 
+type ActiveProfileResponse struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	DBType   string `json:"dbType"`
+	Database string `json:"database"`
+	Schema   string `json:"schema"`
+}
+
+type DatabaseColumnResponse struct {
+	Name         string `json:"name"`
+	DataType     string `json:"dataType"`
+	Nullable     bool   `json:"nullable"`
+	IsPrimaryKey bool   `json:"isPrimaryKey"`
+	IsForeignKey bool   `json:"isForeignKey"`
+	IsUnique     bool   `json:"isUnique"`
+}
+
+type DatabaseTableResponse struct {
+	Namespace string                   `json:"namespace"`
+	Name      string                   `json:"name"`
+	Columns   []DatabaseColumnResponse `json:"columns"`
+}
+
+type DatabaseForeignKeyResponse struct {
+	Name        string   `json:"name"`
+	FromTable   string   `json:"fromTable"`
+	FromColumns []string `json:"fromColumns"`
+	ToTable     string   `json:"toTable"`
+	ToColumns   []string `json:"toColumns"`
+}
+
+type DatabaseSchemaResponse struct {
+	ActiveProfile ActiveProfileResponse        `json:"activeProfile"`
+	Tables        []DatabaseTableResponse      `json:"tables"`
+	ForeignKeys   []DatabaseForeignKeyResponse `json:"foreignKeys"`
+}
+
 type Response[T any] struct {
 	Data  *T             `json:"data"`
 	Error *ErrorResponse `json:"error"`
