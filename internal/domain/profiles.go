@@ -2,13 +2,17 @@ package domain
 
 import (
 	"errors"
+	"math"
 	"strings"
 )
 
 var (
 	ErrInvalidProfile       = errors.New("invalid profile")
 	ErrInvalidActiveProfile = errors.New("invalid active profile")
+	ErrInvalidFlowState     = errors.New("invalid flow state")
 )
+
+const FlowStateVersion = 1
 
 type DBType string
 
@@ -26,6 +30,17 @@ type Profile struct {
 	Database string
 	Schema   string
 	User     string
+}
+
+type FlowState struct {
+	Version     int
+	TableStates map[string]TableFlowState
+}
+
+type TableFlowState struct {
+	X        float64
+	Y        float64
+	Expanded bool
 }
 
 type ProfileDraft struct {
@@ -103,6 +118,29 @@ func ValidateActiveProfile(profiles []Profile, activeID *string) error {
 	}
 
 	return ErrInvalidActiveProfile
+}
+
+// 空フロー状態生成
+func EmptyFlowState() FlowState {
+	return FlowState{
+		Version:     FlowStateVersion,
+		TableStates: map[string]TableFlowState{},
+	}
+}
+
+// フロー状態検証
+func (s FlowState) Validate() error {
+	if s.Version != FlowStateVersion || s.TableStates == nil {
+		return ErrInvalidFlowState
+	}
+
+	for tableName, tableState := range s.TableStates {
+		if strings.TrimSpace(tableName) == "" || math.IsNaN(tableState.X) || math.IsInf(tableState.X, 0) || math.IsNaN(tableState.Y) || math.IsInf(tableState.Y, 0) {
+			return ErrInvalidFlowState
+		}
+	}
+
+	return nil
 }
 
 // プロファイル名検証
