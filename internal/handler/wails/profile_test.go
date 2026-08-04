@@ -615,7 +615,7 @@ func TestAppHandlerDeleteConnectionProfileDoesNotLogCredentialErrorCause(t *test
 				},
 				deleteErr: tt.deleteError,
 			}
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), usecase.NewAppUseCase(repository))
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), usecase.NewAppUseCase(repository), usecase.NewInspectionUseCase(repository))
 
 			result := handler.DeleteConnectionProfile("profile-1")
 
@@ -671,7 +671,7 @@ func TestAppHandlerActivateConnectionProfileDoesNotLogConnectionErrorCause(t *te
 				connectionErr:   tt.connectionError,
 			}
 			appUseCase := usecase.NewAppUseCase(profileRepository)
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase, usecase.NewInspectionUseCase(profileRepository))
 
 			result := handler.ActivateConnectionProfile("profile-1")
 
@@ -730,7 +730,7 @@ func TestAppHandlerSaveConnectionProfileDoesNotLogConnectionErrorCause(t *testin
 				connectionErr: tt.connectionError,
 			}
 			appUseCase := usecase.NewAppUseCase(profileRepository)
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase, usecase.NewInspectionUseCase(profileRepository))
 
 			result := handler.SaveConnectionProfile(tt.request)
 

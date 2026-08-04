@@ -32,6 +32,11 @@ type connectionProfileRepositoryStub struct {
 	password        string
 }
 
+// スキーマ取得再現
+func (s *connectionProfileRepositoryStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
+	return domain.Schema{}, nil
+}
+
 // 接続プロファイル読込再現
 func (s *connectionProfileRepositoryStub) LoadProfiles() ([]domain.Profile, *string, error) {
 	s.calls++
@@ -82,7 +87,7 @@ func newTestAppHandler(t *testing.T, store *config.Store, repository *connection
 	logger := applogger.NewWithWriter(io.Discard, slog.LevelDebug)
 	appUseCase := usecase.NewAppUseCase(repository)
 
-	return NewAppHandler(logger, store, appUseCase)
+	return NewAppHandler(logger, store, appUseCase, usecase.NewInspectionUseCase(repository))
 }
 
 // テスト用プロファイル生成
