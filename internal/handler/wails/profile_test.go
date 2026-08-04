@@ -95,6 +95,92 @@ func TestAppHandlerCheckProfiles(t *testing.T) {
 	}
 }
 
+// フロー状態取得レスポンス検証
+func TestAppHandlerLoadFlowState(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	tests := []struct {
+		name       string
+		repository connectionProfileRepositoryStub
+		useCaseNil bool
+		wantCode   apperr.Code
+		wantData   bool
+		wantLog    bool
+	}{
+		{
+			name: "フロー状態DTOを返す",
+			repository: connectionProfileRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+				flowState: domain.FlowState{Version: domain.FlowStateVersion, TableStates: map[string]domain.TableFlowState{
+					"users": {X: 100.5, Y: -20, Expanded: true},
+				}},
+			},
+			wantData: true,
+		},
+		{
+			name: "読込失敗を安全なエラーとエラーコードログで返す",
+			repository: connectionProfileRepositoryStub{
+				profiles:     []domain.Profile{profile},
+				activeID:     stringPointer(profile.ID),
+				flowStateErr: errors.New("config path=/private/secret/config.json failed"),
+			},
+			wantCode: apperr.CodeUnexpected,
+			wantLog:  true,
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			useCaseNil: true,
+			wantCode:   apperr.CodeConfigReadFailed,
+			wantLog:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			logger := applogger.NewWithWriter(&output, slog.LevelDebug)
+			var appUseCase *usecase.AppUseCase
+			if !tt.useCaseNil {
+				appUseCase = usecase.NewAppUseCase(&tt.repository)
+			}
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+
+			got := handler.LoadFlowState()
+			if tt.wantData {
+				if got.Data == nil {
+					t.Fatal("LoadFlowState() Data = nil, want non-nil")
+				}
+				if got.Error != nil {
+					t.Errorf("LoadFlowState() Error = %#v, want nil", got.Error)
+				}
+				state := got.Data.TableStates["users"]
+				if got.Data.Version != domain.FlowStateVersion || state.X != 100.5 || state.Y != -20 || !state.Expanded {
+					t.Errorf("LoadFlowState() Data = %#v, want users state", got.Data)
+				}
+
+				return
+			}
+			if got.Error == nil {
+				t.Fatal("LoadFlowState() Error = nil, want non-nil")
+			}
+			if got.Error.Code != string(tt.wantCode) {
+				t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+			}
+			if strings.Contains(got.Error.Message, "secret") || strings.Contains(got.Error.Message, "path=") {
+				t.Errorf("Error.Message = %q, want no sensitive detail", got.Error.Message)
+			}
+			if tt.wantLog {
+				if !strings.Contains(output.String(), "code="+string(tt.wantCode)) {
+					t.Errorf("log = %q, want code=%s", output.String(), tt.wantCode)
+				}
+				if strings.Contains(output.String(), "secret") || strings.Contains(output.String(), "path=") {
+					t.Errorf("log = %q, want no sensitive detail", output.String())
+				}
+			}
+		})
+	}
+}
+
 // 接続プロファイル一覧取得
 func TestAppHandlerListConnectionProfiles(t *testing.T) {
 	tests := []struct {
@@ -615,7 +701,7 @@ func TestAppHandlerDeleteConnectionProfileDoesNotLogCredentialErrorCause(t *test
 				},
 				deleteErr: tt.deleteError,
 			}
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), usecase.NewAppUseCase(repository), usecase.NewInspectionUseCase(repository))
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), usecase.NewAppUseCase(repository))
 
 			result := handler.DeleteConnectionProfile("profile-1")
 
@@ -671,7 +757,7 @@ func TestAppHandlerActivateConnectionProfileDoesNotLogConnectionErrorCause(t *te
 				connectionErr:   tt.connectionError,
 			}
 			appUseCase := usecase.NewAppUseCase(profileRepository)
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase, usecase.NewInspectionUseCase(profileRepository))
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
 
 			result := handler.ActivateConnectionProfile("profile-1")
 
@@ -730,7 +816,7 @@ func TestAppHandlerSaveConnectionProfileDoesNotLogConnectionErrorCause(t *testin
 				connectionErr: tt.connectionError,
 			}
 			appUseCase := usecase.NewAppUseCase(profileRepository)
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase, usecase.NewInspectionUseCase(profileRepository))
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
 
 			result := handler.SaveConnectionProfile(tt.request)
 

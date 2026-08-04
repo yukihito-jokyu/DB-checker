@@ -34,8 +34,7 @@ func main() {
 	}
 	appRepository := newApplicationRepository(configStore)
 	appUseCase := usecase.NewAppUseCase(appRepository)
-	inspectionUseCase := usecase.NewInspectionUseCase(appRepository)
-	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase, inspectionUseCase)
+	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase)
 
 	err = wails.Run(&options.App{
 		Title:  "DB-checker",

@@ -30,11 +30,18 @@ type connectionProfileRepositoryStub struct {
 	connectionErr   error
 	connectionCalls int
 	password        string
+	flowState       domain.FlowState
+	flowStateErr    error
 }
 
 // スキーマ取得再現
 func (s *connectionProfileRepositoryStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
 	return domain.Schema{}, nil
+}
+
+// フロー状態読込再現
+func (s *connectionProfileRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
+	return s.flowState, s.flowStateErr
 }
 
 // 接続プロファイル読込再現
@@ -87,7 +94,7 @@ func newTestAppHandler(t *testing.T, store *config.Store, repository *connection
 	logger := applogger.NewWithWriter(io.Discard, slog.LevelDebug)
 	appUseCase := usecase.NewAppUseCase(repository)
 
-	return NewAppHandler(logger, store, appUseCase, usecase.NewInspectionUseCase(repository))
+	return NewAppHandler(logger, store, appUseCase)
 }
 
 // テスト用プロファイル生成

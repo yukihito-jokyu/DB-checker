@@ -22,11 +22,21 @@ type appRepositoryStub struct {
 	saveCalls     int
 	credentials   *credentialState
 	connection    *connectionState
+	flowState     domain.FlowState
+	flowStateErr  error
+	flowStateID   string
 }
 
 // 接続プロファイル読込再現
 func (s *appRepositoryStub) LoadProfiles() ([]domain.Profile, *string, error) {
 	return s.profiles, s.activeID, s.loadErr
+}
+
+// フロー状態読込再現
+func (s *appRepositoryStub) LoadFlowState(profileID string) (domain.FlowState, error) {
+	s.flowStateID = profileID
+
+	return s.flowState, s.flowStateErr
 }
 
 // 接続プロファイル保存再現
@@ -79,6 +89,11 @@ func (s *appRepositoryStub) CheckConnection(_ context.Context, profile domain.Pr
 	s.connection.password = password
 
 	return s.connection.err
+}
+
+// スキーマ取得再現
+func (*appRepositoryStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
+	return domain.Schema{}, nil
 }
 
 // 接続プロファイル読込
@@ -160,6 +175,68 @@ func TestAppUseCaseLoadProfiles(t *testing.T) {
 			}
 			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
 				t.Errorf("LoadProfiles() error = %v, want cause %v", err, tt.wantCause)
+			}
+		})
+	}
+}
+
+// フロー状態取得検証
+func TestAppUseCaseLoadFlowState(t *testing.T) {
+	profile := newSaveTestProfile(t, "profile-1")
+	wantState := domain.FlowState{
+		Version: domain.FlowStateVersion,
+		TableStates: map[string]domain.TableFlowState{
+			"users": {X: 100, Y: 200, Expanded: true},
+		},
+	}
+	tests := []struct {
+		name          string
+		repository    appRepositoryStub
+		wantState     domain.FlowState
+		wantCode      apperr.Code
+		wantProfileID string
+	}{
+		{
+			name: "アクティブプロファイルの状態を返す",
+			repository: appRepositoryStub{
+				profiles:  []domain.Profile{profile},
+				activeID:  stringPointer(profile.ID),
+				flowState: wantState,
+			},
+			wantState:     wantState,
+			wantProfileID: profile.ID,
+		},
+		{
+			name: "アクティブプロファイル未選択を返す",
+			repository: appRepositoryStub{
+				profiles: []domain.Profile{profile},
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "削除済みアクティブプロファイルを設定エラーとして返す",
+			repository: appRepositoryStub{
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeConfigBroken,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			got, err := NewAppUseCase(&repository).LoadFlowState()
+			if gotCode := saveErrorCode(err); gotCode != tt.wantCode {
+				t.Errorf("LoadFlowState() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if tt.wantCode != "" {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.wantState) {
+				t.Errorf("LoadFlowState() = %#v, want %#v", got, tt.wantState)
+			}
+			if gotProfileID := repository.flowStateID; gotProfileID != tt.wantProfileID {
+				t.Errorf("LoadFlowState() profile ID = %q, want %q", gotProfileID, tt.wantProfileID)
 			}
 		})
 	}

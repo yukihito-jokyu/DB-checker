@@ -25,6 +25,37 @@ func (h *AppHandler) CheckProfiles() Response[ProfileCheckResponse] {
 	})
 }
 
+// フロー状態取得
+func (h *AppHandler) LoadFlowState() Response[FlowStateResponse] {
+	h.logger.Info(context.Background(), "flow state requested", slog.String("operation", "flow_state_load"))
+
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeConfigReadFailed)
+		h.logFailureWithCode("flow state load failed", "flow_state_load", err)
+
+		return Fail[FlowStateResponse](err)
+	}
+
+	state, err := h.appUseCase.LoadFlowState()
+	if err != nil {
+		h.logFailureWithCode("flow state load failed", "flow_state_load", err)
+
+		return Fail[FlowStateResponse](err)
+	}
+
+	return OK(toFlowStateResponse(state))
+}
+
+// フロー状態レスポンス変換
+func toFlowStateResponse(state domain.FlowState) FlowStateResponse {
+	tableStates := make(map[string]TableFlowStateResponse, len(state.TableStates))
+	for tableName, tableState := range state.TableStates {
+		tableStates[tableName] = TableFlowStateResponse{X: tableState.X, Y: tableState.Y, Expanded: tableState.Expanded}
+	}
+
+	return FlowStateResponse{Version: state.Version, TableStates: tableStates}
+}
+
 // 接続プロファイル保存
 func (h *AppHandler) SaveConnectionProfile(request SaveConnectionProfileRequest) Response[ConnectionProfilesResponse] {
 	h.logger.Info(context.Background(), "connection profile save requested", slog.String("operation", "connection_profile_save"))

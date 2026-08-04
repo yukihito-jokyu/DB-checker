@@ -88,6 +88,17 @@ type DatabaseSchemaResponse struct {
 	ForeignKeys   []DatabaseForeignKeyResponse `json:"foreignKeys"`
 }
 
+type TableFlowStateResponse struct {
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Expanded bool    `json:"expanded"`
+}
+
+type FlowStateResponse struct {
+	Version     int                               `json:"version"`
+	TableStates map[string]TableFlowStateResponse `json:"tableStates"`
+}
+
 type Response[T any] struct {
 	Data  *T             `json:"data"`
 	Error *ErrorResponse `json:"error"`

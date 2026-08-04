@@ -248,3 +248,16 @@ func (u *AppUseCase) LoadProfiles() ([]domain.Profile, *string, error) {
 
 	return profiles, activeID, nil
 }
+
+// アクティブプロファイルのフロー状態取得
+func (u *AppUseCase) LoadFlowState() (domain.FlowState, error) {
+	_, activeID, err := u.LoadProfiles()
+	if err != nil {
+		return domain.FlowState{}, err
+	}
+	if activeID == nil {
+		return domain.FlowState{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	return u.repository.LoadFlowState(*activeID)
+}
