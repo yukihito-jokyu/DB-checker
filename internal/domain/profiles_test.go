@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -505,6 +506,65 @@ func TestValidateActiveProfile(t *testing.T) {
 			err := ValidateActiveProfile([]Profile{profile}, tt.activeID)
 			if gotErr := errors.Is(err, ErrInvalidActiveProfile); gotErr != tt.wantErr {
 				t.Errorf("ValidateActiveProfile() invalid active error = %v, want %v (error = %v)", gotErr, tt.wantErr, err)
+			}
+		})
+	}
+}
+
+// フロー状態検証
+func TestFlowStateValidate(t *testing.T) {
+	tests := []struct {
+		name  string
+		state FlowState
+		valid bool
+	}{
+		{
+			name: "テーブル状態を検証する",
+			state: FlowState{
+				Version: FlowStateVersion,
+				TableStates: map[string]TableFlowState{
+					"users": {X: 120.5, Y: -20, Expanded: true},
+				},
+			},
+			valid: true,
+		},
+		{
+			name:  "空状態を検証する",
+			state: EmptyFlowState(),
+			valid: true,
+		},
+		{
+			name: "未知バージョンを拒否する",
+			state: FlowState{
+				Version:     FlowStateVersion + 1,
+				TableStates: map[string]TableFlowState{},
+			},
+		},
+		{
+			name: "空テーブル名を拒否する",
+			state: FlowState{
+				Version: FlowStateVersion,
+				TableStates: map[string]TableFlowState{
+					" ": {X: 0, Y: 0},
+				},
+			},
+		},
+		{
+			name: "非有限座標を拒否する",
+			state: FlowState{
+				Version: FlowStateVersion,
+				TableStates: map[string]TableFlowState{
+					"users": {X: math.Inf(1), Y: 0},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.state.Validate()
+			if gotValid := err == nil; gotValid != tt.valid {
+				t.Errorf("Validate() valid = %v, want %v", gotValid, tt.valid)
 			}
 		})
 	}

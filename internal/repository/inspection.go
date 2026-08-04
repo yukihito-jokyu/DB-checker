@@ -9,6 +9,8 @@ import (
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 )
 
+var openDatabase = sql.Open
+
 const (
 	mysqlSchemaTableQuery = `SELECT
 	table_name
@@ -136,7 +138,7 @@ ORDER BY
 // スキーマメタデータ取得
 func (r *AppRepository) InspectSchema(ctx context.Context, profile domain.Profile, password string) (domain.Schema, error) {
 	driverName, dsn := connectionDSN(profile, password)
-	database, err := sql.Open(driverName, dsn)
+	database, err := openDatabase(driverName, dsn)
 	if err != nil {
 		return domain.Schema{}, err
 	}

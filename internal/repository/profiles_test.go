@@ -2,6 +2,7 @@ package repository
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"testing"
 
@@ -208,6 +209,150 @@ func TestAppRepositorySaveProfiles(t *testing.T) {
 				t.Errorf("SaveProfiles() flow state = %q, want %q", got, tt.wantFlowState)
 			}
 		})
+	}
+}
+
+// フロー状態読込検証
+func TestAppRepositoryLoadFlowState(t *testing.T) {
+	wantState := domain.FlowState{
+		Version: domain.FlowStateVersion,
+		TableStates: map[string]domain.TableFlowState{
+			"users": {X: 100.5, Y: -20, Expanded: true},
+		},
+	}
+	tests := []struct {
+		name          string
+		raw           string
+		withoutConfig bool
+		want          domain.FlowState
+		wantErrorCode apperr.Code
+	}{
+		{
+			name: "保存済み状態を返す",
+			raw:  `{"version":1,"tableStates":{"users":{"x":100.5,"y":-20,"expanded":true}}}`,
+			want: wantState,
+		},
+		{
+			name: "未保存状態を空状態として返す",
+			want: domain.EmptyFlowState(),
+		},
+		{
+			name: "FlowStateとして不正なJSON値を空状態として返す",
+			raw:  `"invalid"`,
+			want: domain.EmptyFlowState(),
+		},
+		{
+			name: "未知バージョンを空状態として返す",
+			raw:  `{"version":2,"tableStates":{}}`,
+			want: domain.EmptyFlowState(),
+		},
+		{
+			name: "非有限数値を空状態として返す",
+			raw:  `{"version":1,"tableStates":{"users":{"x":1e1000,"y":0,"expanded":true}}}`,
+			want: domain.EmptyFlowState(),
+		},
+		{
+			name: "nullのテーブル状態を空状態として返す",
+			raw:  `{"version":1,"tableStates":null}`,
+			want: domain.EmptyFlowState(),
+		},
+		{
+			name:          "設定読込失敗を返す",
+			withoutConfig: true,
+			wantErrorCode: apperr.CodeConfigNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := config.NewStore(t.TempDir())
+			if !tt.withoutConfig {
+				configuration := config.Default()
+				if tt.raw != "" {
+					configuration.FlowStates["profile-1"] = json.RawMessage(tt.raw)
+				}
+				if err := store.Save(configuration); err != nil {
+					t.Fatalf("Save() error = %v", err)
+				}
+			}
+
+			got, err := NewAppRepository(store).LoadFlowState("profile-1")
+			if gotCode := errorCode(err); gotCode != tt.wantErrorCode {
+				t.Errorf("LoadFlowState() error code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+			if tt.wantErrorCode != "" {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("LoadFlowState() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// プロファイル別フロー状態読込検証
+func TestAppRepositoryLoadFlowStateByProfile(t *testing.T) {
+	store := config.NewStore(t.TempDir())
+	configuration := config.Default()
+	configuration.FlowStates = map[string]json.RawMessage{
+		"profile-1": json.RawMessage(`{"version":1,"tableStates":{"users":{"x":100,"y":200,"expanded":true}}}`),
+		"profile-2": json.RawMessage(`{"version":1,"tableStates":{"orders":{"x":300,"y":400,"expanded":false}}}`),
+	}
+	if err := store.Save(configuration); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		profileID string
+		want      domain.FlowState
+	}{
+		{
+			name:      "profile-1の状態を返す",
+			profileID: "profile-1",
+			want: domain.FlowState{
+				Version: domain.FlowStateVersion,
+				TableStates: map[string]domain.TableFlowState{
+					"users": {X: 100, Y: 200, Expanded: true},
+				},
+			},
+		},
+		{
+			name:      "profile-2の状態を返す",
+			profileID: "profile-2",
+			want: domain.FlowState{
+				Version: domain.FlowStateVersion,
+				TableStates: map[string]domain.TableFlowState{
+					"orders": {X: 300, Y: 400, Expanded: false},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewAppRepository(store).LoadFlowState(tt.profileID)
+			if err != nil {
+				t.Fatalf("LoadFlowState() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("LoadFlowState() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// 設定全体構文不正時フロー状態読込検証
+func TestAppRepositoryLoadFlowStateWithBrokenConfig(t *testing.T) {
+	store := config.NewStore(t.TempDir())
+	content := `{"version":1,"connectionProfiles":[],"activeConnectionProfileId":null,"flowStates":{"profile-1":}}`
+	if err := os.WriteFile(store.Path(), []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := NewAppRepository(store).LoadFlowState("profile-1")
+	if gotCode := errorCode(err); gotCode != apperr.CodeConfigBroken {
+		t.Errorf("LoadFlowState() error code = %q, want %q", gotCode, apperr.CodeConfigBroken)
 	}
 }
 

@@ -23,6 +23,8 @@ type schemaRepositoryStub struct {
 	credentialFound bool
 	schema          domain.Schema
 	inspectErr      error
+	flowState       domain.FlowState
+	flowStateErr    error
 }
 
 // プロファイル読込再現
@@ -30,9 +32,28 @@ func (s *schemaRepositoryStub) LoadProfiles() ([]domain.Profile, *string, error)
 	return []domain.Profile{s.profile}, s.activeID, nil
 }
 
+// フロー状態読込再現
+func (s *schemaRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
+	return s.flowState, s.flowStateErr
+}
+
+// プロファイル保存再現
+func (*schemaRepositoryStub) SaveProfiles([]domain.Profile, *string) error { return nil }
+
 // 資格情報取得再現
 func (s *schemaRepositoryStub) GetCredential(string) (string, bool, error) {
 	return s.credential, s.credentialFound, nil
+}
+
+// 資格情報保存再現
+func (*schemaRepositoryStub) SetCredential(string, string) error { return nil }
+
+// 資格情報削除再現
+func (*schemaRepositoryStub) DeleteCredential(string) error { return nil }
+
+// 接続確認再現
+func (*schemaRepositoryStub) CheckConnection(context.Context, domain.Profile, string) error {
+	return nil
 }
 
 // スキーマ取得再現
@@ -116,12 +137,11 @@ func TestAppHandlerGetDatabaseSchema(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var output bytes.Buffer
 			logger := applogger.NewWithWriter(&output, slog.LevelDebug)
-			appUseCase := usecase.NewAppUseCase(&connectionProfileRepositoryStub{})
-			var inspectionUseCase *usecase.InspectionUseCase
+			var appUseCase *usecase.AppUseCase
 			if tt.repository.activeID != nil {
-				inspectionUseCase = usecase.NewInspectionUseCase(&tt.repository)
+				appUseCase = usecase.NewAppUseCase(&tt.repository)
 			}
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase, inspectionUseCase)
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
 			got := handler.GetDatabaseSchema()
 			if tt.wantData {
 				if got.Data == nil {

@@ -9,11 +9,13 @@ import (
 // アプリケーションリポジトリ
 type AppRepository interface {
 	LoadProfiles() ([]domain.Profile, *string, error)
+	LoadFlowState(string) (domain.FlowState, error)
 	SaveProfiles([]domain.Profile, *string) error
 	GetCredential(string) (credential string, found bool, err error)
 	SetCredential(string, string) error
 	DeleteCredential(string) error
 	CheckConnection(context.Context, domain.Profile, string) error
+	InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error)
 }
 
 // アプリケーションユースケース

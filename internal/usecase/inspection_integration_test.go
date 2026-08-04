@@ -16,7 +16,7 @@ import (
 )
 
 // データベーススキーマ取得結合検証
-func TestInspectionUseCaseGetDatabaseSchemaIntegration(t *testing.T) {
+func TestAppUseCaseGetDatabaseSchemaIntegration(t *testing.T) {
 	targets, err := db.TargetsFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestInspectionUseCaseGetDatabaseSchemaIntegration(t *testing.T) {
 			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
 
 			appRepository, profile, activeID := integrationInspectionRepository(t, target)
-			gotProfile, schema, err := NewInspectionUseCase(appRepository).GetDatabaseSchema(context.Background())
+			gotProfile, schema, err := NewAppUseCase(appRepository).GetDatabaseSchema(context.Background())
 			if err != nil {
 				t.Fatalf("GetDatabaseSchema() error = %v", err)
 			}
@@ -47,7 +47,7 @@ func TestInspectionUseCaseGetDatabaseSchemaIntegration(t *testing.T) {
 			if err := appRepository.SaveProfiles([]domain.Profile{invalidProfile}, &activeID); err != nil {
 				t.Fatalf("SaveProfiles() error = %v", err)
 			}
-			_, _, err = NewInspectionUseCase(appRepository).GetDatabaseSchema(context.Background())
+			_, _, err = NewAppUseCase(appRepository).GetDatabaseSchema(context.Background())
 			if !apperr.IsCode(err, apperr.CodeSchemaLoadFailed) {
 				t.Errorf("GetDatabaseSchema() error = %v, want code %q", err, apperr.CodeSchemaLoadFailed)
 			}

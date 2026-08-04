@@ -12,14 +12,14 @@ import (
 func (h *AppHandler) GetDatabaseSchema() Response[DatabaseSchemaResponse] {
 	h.logger.Info(context.Background(), "database schema requested", slog.String("operation", "database_schema_get"))
 
-	if h.inspectionUseCase == nil {
+	if h.appUseCase == nil {
 		err := apperr.New(apperr.CodeSchemaLoadFailed)
 		h.logFailureWithCode("database schema get failed", "database_schema_get", err)
 
 		return Fail[DatabaseSchemaResponse](err)
 	}
 
-	profile, schema, err := h.inspectionUseCase.GetDatabaseSchema(context.Background())
+	profile, schema, err := h.appUseCase.GetDatabaseSchema(context.Background())
 	if err != nil {
 		h.logFailureWithCode("database schema get failed", "database_schema_get", err)
 
