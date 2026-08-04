@@ -18,6 +18,10 @@ export function GetConfig() {
   return window['go']['wails']['AppHandler']['GetConfig']();
 }
 
+export function GetDatabaseSchema() {
+  return window['go']['wails']['AppHandler']['GetDatabaseSchema']();
+}
+
 export function GetStatus() {
   return window['go']['wails']['AppHandler']['GetStatus']();
 }
