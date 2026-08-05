@@ -31,6 +31,9 @@ func (*inspectionRepositoryStub) LoadFlowState(string) (domain.FlowState, error)
 	return domain.EmptyFlowState(), nil
 }
 
+// フロー状態保存再現
+func (*inspectionRepositoryStub) SaveFlowState(string, domain.FlowState) error { return nil }
+
 // プロファイル保存再現
 func (*inspectionRepositoryStub) SaveProfiles([]domain.Profile, *string) error { return nil }
 

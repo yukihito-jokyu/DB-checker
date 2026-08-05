@@ -11,20 +11,23 @@ import (
 )
 
 type appRepositoryStub struct {
-	profiles      []domain.Profile
-	activeID      *string
-	loadErr       error
-	saveErr       error
-	saveErrs      []error
-	savedProfiles []domain.Profile
-	savedActiveID *string
-	savedHistory  []savedProfileState
-	saveCalls     int
-	credentials   *credentialState
-	connection    *connectionState
-	flowState     domain.FlowState
-	flowStateErr  error
-	flowStateID   string
+	profiles       []domain.Profile
+	activeID       *string
+	loadErr        error
+	saveErr        error
+	saveErrs       []error
+	savedProfiles  []domain.Profile
+	savedActiveID  *string
+	savedHistory   []savedProfileState
+	saveCalls      int
+	credentials    *credentialState
+	connection     *connectionState
+	flowState      domain.FlowState
+	flowStateErr   error
+	flowStateID    string
+	savedFlowState domain.FlowState
+	savedFlowID    string
+	saveFlowErr    error
 }
 
 // 接続プロファイル読込再現
@@ -37,6 +40,14 @@ func (s *appRepositoryStub) LoadFlowState(profileID string) (domain.FlowState, e
 	s.flowStateID = profileID
 
 	return s.flowState, s.flowStateErr
+}
+
+// フロー状態保存再現
+func (s *appRepositoryStub) SaveFlowState(profileID string, state domain.FlowState) error {
+	s.savedFlowID = profileID
+	s.savedFlowState = state
+
+	return s.saveFlowErr
 }
 
 // 接続プロファイル保存再現
@@ -237,6 +248,115 @@ func TestAppUseCaseLoadFlowState(t *testing.T) {
 			}
 			if gotProfileID := repository.flowStateID; gotProfileID != tt.wantProfileID {
 				t.Errorf("LoadFlowState() profile ID = %q, want %q", gotProfileID, tt.wantProfileID)
+			}
+		})
+	}
+}
+
+// フロー状態保存検証
+func TestAppUseCaseSaveFlowState(t *testing.T) {
+	profile := newSaveTestProfile(t, "profile-1")
+	repositoryErr := errors.New("repository error")
+	state := domain.FlowState{
+		Version: domain.FlowStateVersion,
+		TableStates: map[string]domain.TableFlowState{
+			"users": {X: 100, Y: 200, Expanded: true},
+		},
+	}
+	tests := []struct {
+		name          string
+		repository    appRepositoryStub
+		state         domain.FlowState
+		wantError     bool
+		wantCode      apperr.Code
+		wantCause     error
+		wantProfileID string
+		wantSave      bool
+	}{
+		{
+			name: "アクティブプロファイルに状態を保存する",
+			repository: appRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			state:         state,
+			wantProfileID: profile.ID,
+			wantSave:      true,
+		},
+		{
+			name: "プロファイル読込失敗を返す",
+			repository: appRepositoryStub{
+				loadErr: repositoryErr,
+			},
+			state:     state,
+			wantError: true,
+			wantCause: repositoryErr,
+		},
+		{
+			name: "不正な状態を入力エラーとして返す",
+			repository: appRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			state: domain.FlowState{
+				Version:     domain.FlowStateVersion + 1,
+				TableStates: map[string]domain.TableFlowState{},
+			},
+			wantError: true,
+			wantCode:  apperr.CodeValidationFailed,
+		},
+		{
+			name: "アクティブプロファイル未選択を返す",
+			repository: appRepositoryStub{
+				profiles: []domain.Profile{profile},
+			},
+			state:     state,
+			wantError: true,
+			wantCode:  apperr.CodeProfileNotFound,
+		},
+		{
+			name: "設定保存失敗を返す",
+			repository: appRepositoryStub{
+				profiles:    []domain.Profile{profile},
+				activeID:    stringPointer(profile.ID),
+				saveFlowErr: apperr.New(apperr.CodeConfigWriteFailed),
+			},
+			state:     state,
+			wantError: true,
+			wantCode:  apperr.CodeConfigWriteFailed,
+			wantSave:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			got, err := NewAppUseCase(&repository).SaveFlowState(tt.state)
+
+			if gotFound := err != nil; gotFound != tt.wantError {
+				t.Fatalf("SaveFlowState() error found = %v, want %v", gotFound, tt.wantError)
+			}
+			if gotCode := saveErrorCode(err); gotCode != tt.wantCode {
+				t.Errorf("SaveFlowState() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Errorf("SaveFlowState() error = %v, want cause %v", err, tt.wantCause)
+			}
+			if tt.wantError {
+				if !tt.wantSave && repository.savedFlowID != "" {
+					t.Errorf("SaveFlowState() profile ID = %q, want empty", repository.savedFlowID)
+				}
+
+				return
+			}
+			if !reflect.DeepEqual(got, tt.state) {
+				t.Errorf("SaveFlowState() = %#v, want %#v", got, tt.state)
+			}
+			if gotProfileID := repository.savedFlowID; gotProfileID != tt.wantProfileID {
+				t.Errorf("SaveFlowState() profile ID = %q, want %q", gotProfileID, tt.wantProfileID)
+			}
+			if gotSaved := !reflect.DeepEqual(repository.savedFlowState, domain.FlowState{}); gotSaved != tt.wantSave {
+				t.Errorf("SaveFlowState() saved = %v, want %v", gotSaved, tt.wantSave)
 			}
 		})
 	}
