@@ -97,6 +97,84 @@ func TestAppUseCaseGetTableStructureIntegration(t *testing.T) {
 	}
 }
 
+// テーブル統計取得結合検証
+func TestAppUseCaseGetTableStatisticsIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			database := integrationDatabase(t, target)
+			defer database.Close()
+			adminDatabase := integrationAdminDatabase(t, target)
+			if adminDatabase != nil {
+				defer adminDatabase.Close()
+			}
+			defer integrationSchemaCleanup(t, database, adminDatabase, target.Kind)
+			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
+			integrationStatisticsSeed(t, database, target.Kind)
+
+			appRepository, _, _ := integrationInspectionRepository(t, target)
+			statistics, err := NewAppUseCase(appRepository).GetTableStatistics(context.Background(), "schema_child")
+			if err != nil {
+				t.Fatalf("GetTableStatistics() error = %v", err)
+			}
+			if statistics.Status != domain.StatisticsStatusComplete {
+				t.Errorf("Status = %q, want %q", statistics.Status, domain.StatisticsStatusComplete)
+			}
+			if statistics.RowCount.Value == nil || *statistics.RowCount.Value != 3 || statistics.ColumnCount != 6 {
+				t.Errorf("statistics = %#v, want rowCount 3 and columnCount 6", statistics)
+			}
+			if len(statistics.Columns) != 6 || len(statistics.ForeignKeys) != 1 {
+				t.Fatalf("statistics = %#v, want 6 columns and 1 foreign key", statistics)
+			}
+			columns := integrationColumnStatisticsByName(statistics.Columns)
+			status := columns["status"]
+			if status.DistinctCount.Value == nil || *status.DistinctCount.Value != 2 || status.DuplicateCount.Value == nil || *status.DuplicateCount.Value != 1 || status.Min.Value == nil || *status.Min.Value != "closed" || status.Max.Value == nil || *status.Max.Value != "open" {
+				t.Errorf("status statistics = %#v, want duplicate and min/max values", status)
+			}
+			note := columns["note"]
+			if note.NullCount.Value == nil || *note.NullCount.Value != 1 {
+				t.Errorf("note statistics = %#v, want one NULL", note)
+			}
+			metadata := columns["metadata"]
+			if metadata.Min.Status != domain.StatisticsStatusUnavailable || metadata.Min.Reason == nil || *metadata.Min.Reason != "unsupported data type" || metadata.Max.Status != domain.StatisticsStatusUnavailable || metadata.Max.Reason == nil || *metadata.Max.Reason != "unsupported data type" {
+				t.Errorf("metadata statistics = %#v, want unavailable min/max", metadata)
+			}
+			foreignKey := statistics.ForeignKeys[0]
+			if foreignKey.SourceRowCount.Value == nil || *foreignKey.SourceRowCount.Value != 3 || foreignKey.NullCount.Value == nil || *foreignKey.NullCount.Value != 0 || foreignKey.ReferencedRowCount.Value == nil || *foreignKey.ReferencedRowCount.Value != 3 || foreignKey.MissingReferenceCount.Value == nil || *foreignKey.MissingReferenceCount.Value != 0 {
+				t.Errorf("ForeignKey = %#v, want three valid references", foreignKey)
+			}
+		})
+	}
+}
+
+// 統計検証データ投入
+func integrationStatisticsSeed(t *testing.T, database *sql.DB, kind db.Kind) {
+	t.Helper()
+
+	statements := []string{
+		"INSERT INTO schema_parent (part_a, part_b, code) VALUES (1, 10, 'parent-a'), (2, 20, 'parent-b')",
+		"INSERT INTO schema_child (id, parent_a, parent_b, status, note, metadata) VALUES (1, 1, 10, 'open', NULL, '{\"key\": \"one\"}'), (2, 2, 20, 'open', 'same', '{\"key\": \"two\"}'), (3, 1, 10, 'closed', 'same', '{\"key\": \"three\"}')",
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("statistics seed %s Exec() error = %v", kind, err)
+		}
+	}
+}
+
+// カラム統計名前別取得
+func integrationColumnStatisticsByName(columns []domain.ColumnStatistics) map[string]domain.ColumnStatistics {
+	result := make(map[string]domain.ColumnStatistics, len(columns))
+	for _, column := range columns {
+		result[column.Name] = column
+	}
+
+	return result
+}
+
 // 詳細カラム属性検出
 func integrationDetailedColumnsFound(columns []domain.Column) bool {
 	defaultFound := false
@@ -339,7 +417,7 @@ func integrationSchemaStatements(kind db.Kind) []string {
 	if kind == db.MySQL {
 		return []string{
 			"CREATE TABLE schema_parent (part_a INT NOT NULL, part_b INT NOT NULL, code VARCHAR(32) NOT NULL UNIQUE, optional_note VARCHAR(32) NULL DEFAULT 'parent-default', PRIMARY KEY (part_a, part_b))",
-			"CREATE TABLE schema_child (id INT NOT NULL PRIMARY KEY, parent_a INT NOT NULL, parent_b INT NOT NULL, status VARCHAR(32) NOT NULL, INDEX idx_schema_child_status (status), INDEX idx_schema_child_parent_status (parent_b, status), CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
+			"CREATE TABLE schema_child (id INT NOT NULL PRIMARY KEY, parent_a INT NOT NULL, parent_b INT NOT NULL, status VARCHAR(32) NOT NULL, note VARCHAR(32) NULL, metadata JSON NOT NULL, INDEX idx_schema_child_status (status), INDEX idx_schema_child_parent_status (parent_b, status), CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
 			"CREATE TABLE schema_cycle_left (id INT NOT NULL PRIMARY KEY, right_id INT NOT NULL)",
 			"CREATE TABLE schema_cycle_right (id INT NOT NULL PRIMARY KEY, left_id INT NOT NULL, CONSTRAINT fk_schema_cycle_right_left FOREIGN KEY (left_id) REFERENCES schema_cycle_left (id))",
 			"ALTER TABLE schema_cycle_left ADD CONSTRAINT fk_schema_cycle_left_right FOREIGN KEY (right_id) REFERENCES schema_cycle_right (id)",
@@ -350,7 +428,7 @@ func integrationSchemaStatements(kind db.Kind) []string {
 		"CREATE SCHEMA integration_outside",
 		"CREATE TABLE integration_outside.schema_outside (id INTEGER PRIMARY KEY)",
 		"CREATE TABLE schema_parent (part_a INTEGER NOT NULL, part_b INTEGER NOT NULL, code VARCHAR(32) NOT NULL UNIQUE, optional_note VARCHAR(32) NULL DEFAULT 'parent-default', PRIMARY KEY (part_a, part_b))",
-		"CREATE TABLE schema_child (id INTEGER PRIMARY KEY, parent_a INTEGER NOT NULL, parent_b INTEGER NOT NULL, status VARCHAR(32) NOT NULL, CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
+		"CREATE TABLE schema_child (id INTEGER PRIMARY KEY, parent_a INTEGER NOT NULL, parent_b INTEGER NOT NULL, status VARCHAR(32) NOT NULL, note VARCHAR(32) NULL, metadata JSON NOT NULL, CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
 		"CREATE INDEX idx_schema_child_status ON schema_child (status)",
 		"CREATE INDEX idx_schema_child_parent_status ON schema_child (parent_b, status)",
 		"CREATE TABLE schema_cycle_left (id INTEGER PRIMARY KEY, right_id INTEGER NOT NULL)",

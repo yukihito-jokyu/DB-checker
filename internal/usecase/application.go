@@ -18,6 +18,7 @@ type AppRepository interface {
 	CheckConnection(context.Context, domain.Profile, string) error
 	InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error)
 	InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error)
+	InspectTableStatistics(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error)
 }
 
 // アプリケーションユースケース

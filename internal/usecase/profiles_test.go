@@ -112,6 +112,11 @@ func (*appRepositoryStub) InspectTableStructure(context.Context, domain.Profile,
 	return domain.TableStructure{}, nil
 }
 
+// テーブル統計取得再現
+func (*appRepositoryStub) InspectTableStatistics(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error) {
+	return domain.TableStatistics{}, nil
+}
+
 // 接続プロファイル読込
 func TestAppUseCaseLoadProfiles(t *testing.T) {
 	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")
