@@ -86,7 +86,7 @@ func (c *inspectionTestConnection) QueryContext(_ context.Context, query string,
 }
 
 // テスト用更新実行
-func (c *inspectionTestConnection) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *inspectionTestConnection) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.scenario.mu.Lock()
 	defer c.scenario.mu.Unlock()
 
@@ -99,6 +99,9 @@ func (c *inspectionTestConnection) ExecContext(_ context.Context, query string, 
 	if response.query != query {
 		return nil, fmt.Errorf("query = %q, want %q", query, response.query)
 	}
+	if response.args != nil && !reflect.DeepEqual(args, response.args) {
+		return nil, fmt.Errorf("args = %#v, want %#v", args, response.args)
+	}
 	if response.err != nil {
 		return nil, response.err
 	}
@@ -106,7 +109,7 @@ func (c *inspectionTestConnection) ExecContext(_ context.Context, query string, 
 		response.after()
 	}
 
-	return driver.RowsAffected(response.execAffected), nil
+	return inspectionTestResult{affected: response.execAffected, err: response.rowsAffectedErr}, nil
 }
 
 // テスト用接続確認
@@ -118,14 +121,31 @@ type inspectionTestScenario struct {
 }
 
 type inspectionTestResponse struct {
-	query        string
-	columns      []string
-	values       [][]driver.Value
-	execAffected int64
-	err          error
-	rowErr       error
-	errorAt      int
-	after        func()
+	query           string
+	columns         []string
+	values          [][]driver.Value
+	execAffected    int64
+	rowsAffectedErr error
+	err             error
+	rowErr          error
+	errorAt         int
+	after           func()
+	args            []driver.NamedValue
+}
+
+type inspectionTestResult struct {
+	affected int64
+	err      error
+}
+
+// テスト用更新件数取得
+func (r inspectionTestResult) RowsAffected() (int64, error) {
+	return r.affected, r.err
+}
+
+// テスト用最終挿入ID取得
+func (inspectionTestResult) LastInsertId() (int64, error) {
+	return 0, errors.New("last insert ID is not supported")
 }
 
 type inspectionTestRows struct {
@@ -2265,15 +2285,32 @@ func TestConvertInputValue(t *testing.T) {
 			dataType: "json",
 			wantErr:  true,
 		},
+		{
+			name:     "RFC3339日時をtime.Timeへ変換する",
+			value:    "2026-08-05T12:34:56+09:00",
+			dataType: "timestamp with time zone",
+			wantErr:  false,
+		},
+		{
+			name:     "RFC3339ではない日時を拒否する",
+			value:    "2026-08-05 12:34:56",
+			dataType: "datetime(6)",
+			wantErr:  true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := convertInputValue(tt.value, tt.dataType)
+			got, err := convertInputValue(tt.value, tt.dataType)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("convertInputValue() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && (strings.Contains(tt.dataType, "timestamp") || strings.Contains(tt.dataType, "datetime")) {
+				if _, ok := got.(time.Time); !ok {
+					t.Errorf("convertInputValue() = %T, want time.Time", got)
+				}
 			}
 		})
 	}
@@ -2696,5 +2733,417 @@ func TestAppRepositoryInsertRow(t *testing.T) {
 				t.Errorf("InsertRow() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+// テーブルセル更新リポジトリ検証
+func TestUpdateCell(t *testing.T) {
+	id := "1"
+	name := "updated"
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+	change := domain.CellUpdate{
+		Table:   ref,
+		Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}},
+		Column:  "name",
+		Value:   domain.CellValue{Kind: domain.CellKindValue, Value: name},
+	}
+	database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+		{
+			query:   postgresTableStructureColumnQuery,
+			columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+			values:  [][]driver.Value{{"id", "int4", false, nil, false, true, false, true}, {"name", "text", false, nil, false, false, false, false}},
+			errorAt: -1,
+		},
+		{query: postgresTableStructureForeignKeyQuery, columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"}, values: [][]driver.Value{}, errorAt: -1},
+		{query: postgresTableStructureIndexQuery, columns: []string{"relname", "attname", "indisunique", "amname"}, values: [][]driver.Value{}, errorAt: -1},
+		{query: `UPDATE "public"."items" SET "name" = $1 WHERE "id" = $2`, execAffected: 1, errorAt: -1},
+	})
+	defer database.Close()
+
+	got, err := updateCell(context.Background(), database, domain.DBTypePostgres, ref, change)
+	if err != nil {
+		t.Fatalf("updateCell() error = %v", err)
+	}
+	if want := (domain.AffectedRows{AffectedRows: 1}); !reflect.DeepEqual(got, want) {
+		t.Errorf("updateCell() = %#v, want %#v", got, want)
+	}
+}
+
+// テーブルセル更新接続検証
+func TestAppRepositoryUpdateCell(t *testing.T) {
+	profile := connectionTestProfile(t, domain.DBTypePostgres)
+	id := "1"
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+	change := domain.CellUpdate{
+		Table:   ref,
+		Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}},
+		Column:  "name",
+		Value:   domain.CellValue{Kind: domain.CellKindValue, Value: "updated"},
+	}
+	originalOpenDatabase := openDatabase
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+	tests := []struct {
+		name      string
+		open      func(string, string) (*sql.DB, error)
+		ctx       context.Context
+		wantError string
+	}{
+		{
+			name: "接続生成失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			ctx:       context.Background(),
+			wantError: "open failed",
+		},
+		{
+			name: "接続確認失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, nil)
+
+				return database, nil
+			},
+			ctx:       canceledInspectionContext(),
+			wantError: context.Canceled.Error(),
+		},
+		{
+			name: "セルを更新する",
+			open: func(string, string) (*sql.DB, error) {
+				responses := updateCellStructureResponses(domain.DBTypePostgres, []domain.Column{
+					{Name: "id", DataType: "int4", IsPrimaryKey: true},
+					{Name: "name", DataType: "text"},
+				})
+				responses = append(responses, inspectionTestResponse{
+					query:        `UPDATE "public"."items" SET "name" = $1 WHERE "id" = $2`,
+					execAffected: 1,
+					errorAt:      -1,
+				})
+				database, _ := newInspectionTestDatabase(t, responses)
+
+				return database, nil
+			},
+			ctx: context.Background(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openDatabase = tt.open
+
+			got, err := NewAppRepository(nil).UpdateCell(tt.ctx, profile, "secret", ref, change)
+			if tt.wantError != "" {
+				if err == nil || err.Error() != tt.wantError {
+					t.Errorf("UpdateCell() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("UpdateCell() error = %v", err)
+			}
+			if got.AffectedRows != 1 {
+				t.Errorf("AffectedRows = %d, want 1", got.AffectedRows)
+			}
+		})
+	}
+}
+
+// テーブルセル更新入力エラー検証
+func TestUpdateCellInputErrors(t *testing.T) {
+	id := "1"
+	invalidBinary := "not-base64"
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+	standardColumns := []domain.Column{
+		{Name: "id", DataType: "int4", IsPrimaryKey: true},
+		{Name: "name", DataType: "text"},
+	}
+	tests := []struct {
+		name      string
+		responses []inspectionTestResponse
+		change    domain.CellUpdate
+		wantError string
+	}{
+		{
+			name: "構造取得失敗を返す",
+			responses: []inspectionTestResponse{{
+				query: postgresTableStructureColumnQuery,
+				err:   errors.New("structure failed"),
+			}},
+			change:    domain.CellUpdate{},
+			wantError: "structure failed",
+		},
+		{
+			name:      "未知更新列を拒否する",
+			responses: updateCellStructureResponses(domain.DBTypePostgres, standardColumns),
+			change: domain.CellUpdate{
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}},
+				Column:  "unknown",
+				Value:   domain.CellValue{Kind: domain.CellKindValue, Value: "updated"},
+			},
+			wantError: "unknown column unknown",
+		},
+		{
+			name: "更新値変換失敗を返す",
+			responses: updateCellStructureResponses(domain.DBTypePostgres, []domain.Column{
+				{Name: "id", DataType: "int4", IsPrimaryKey: true},
+				{Name: "binary_data", DataType: "bytea"},
+			}),
+			change: domain.CellUpdate{
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}},
+				Column:  "binary_data",
+				Value:   domain.CellValue{Kind: domain.CellKindValue, Value: invalidBinary},
+			},
+			wantError: "invalid base64",
+		},
+		{
+			name:      "未知位置指定列を拒否する",
+			responses: updateCellStructureResponses(domain.DBTypePostgres, standardColumns),
+			change: domain.CellUpdate{
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "unknown", Kind: domain.CellKindValue, Value: &id}}},
+				Column:  "name",
+				Value:   domain.CellValue{Kind: domain.CellKindValue, Value: "updated"},
+			},
+			wantError: "unknown locator column unknown",
+		},
+		{
+			name:      "値なし位置指定列を拒否する",
+			responses: updateCellStructureResponses(domain.DBTypePostgres, standardColumns),
+			change: domain.CellUpdate{
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue}}},
+				Column:  "name",
+				Value:   domain.CellValue{Kind: domain.CellKindValue, Value: "updated"},
+			},
+			wantError: "missing locator value",
+		},
+		{
+			name: "位置指定値変換失敗を返す",
+			responses: updateCellStructureResponses(domain.DBTypePostgres, []domain.Column{
+				{Name: "binary_data", DataType: "bytea", IsPrimaryKey: true},
+				{Name: "name", DataType: "text"},
+			}),
+			change: domain.CellUpdate{
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "binary_data", Kind: domain.CellKindValue, Value: &invalidBinary}}},
+				Column:  "name",
+				Value:   domain.CellValue{Kind: domain.CellKindValue, Value: "updated"},
+			},
+			wantError: "invalid base64",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, scenario := newInspectionTestDatabase(t, tt.responses)
+			defer database.Close()
+
+			_, err := updateCell(context.Background(), database, domain.DBTypePostgres, ref, tt.change)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Errorf("updateCell() error = %v, want %q", err, tt.wantError)
+			}
+			assertInspectionQueriesConsumed(t, scenario)
+		})
+	}
+}
+
+// 日時型判定検証
+func TestIsDateTimeDataType(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType string
+		want     bool
+	}{
+		{
+			name:     "空文字を拒否する",
+			dataType: "",
+			want:     false,
+		},
+		{
+			name:     "日時型を許可する",
+			dataType: "timestamp without time zone",
+			want:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDateTimeDataType(tt.dataType); got != tt.want {
+				t.Errorf("isDateTimeDataType() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// テーブルセル更新SQL分岐検証
+func TestUpdateCellSQLVariants(t *testing.T) {
+	id := "1"
+	partA := "10"
+	partB := "20"
+	name := "after"
+	note := "before"
+	encodedOld := "b2xk"
+	encodedNew := "bmV3"
+	metadata := `{"before":true}`
+	occurredAt := "2026-08-05T12:34:56+09:00"
+	parsedOccurredAt, err := time.Parse(time.RFC3339, occurredAt)
+	if err != nil {
+		t.Fatalf("time.Parse() error = %v", err)
+	}
+
+	tests := []struct {
+		name            string
+		dbType          domain.DBType
+		ref             domain.TableRef
+		columns         []domain.Column
+		change          domain.CellUpdate
+		query           string
+		args            []driver.NamedValue
+		execError       error
+		rowsAffectedErr error
+		wantError       string
+	}{
+		{
+			name:   "PostgreSQL既定値更新はプレースホルダーを使わない",
+			dbType: domain.DBTypePostgres,
+			ref:    domain.TableRef{Namespace: "public", Name: "items"},
+			columns: []domain.Column{
+				{Name: "id", DataType: "int4", IsPrimaryKey: true},
+				{Name: "name", DataType: "text", DefaultValue: &name},
+			},
+			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "name", Value: domain.CellValue{Kind: domain.CellKindDefault}},
+			query:  `UPDATE "public"."items" SET "name" = DEFAULT WHERE "id" = $1`,
+			args:   []driver.NamedValue{{Ordinal: 1, Value: "1"}},
+		},
+		{
+			name:   "MySQL既定値更新は引用符と疑問符を使う",
+			dbType: domain.DBTypeMySQL,
+			ref:    domain.TableRef{Namespace: "app", Name: "items"},
+			columns: []domain.Column{
+				{Name: "id", DataType: "int", IsPrimaryKey: true},
+				{Name: "name", DataType: "varchar(32)", DefaultValue: &name},
+			},
+			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "app", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "name", Value: domain.CellValue{Kind: domain.CellKindDefault}},
+			query:  "UPDATE `app`.`items` SET `name` = DEFAULT WHERE `id` = ?",
+			args:   []driver.NamedValue{{Ordinal: 1, Value: "1"}},
+		},
+		{
+			name:   "主キーなしは全カラムとNULL位置指定を使う",
+			dbType: domain.DBTypePostgres,
+			ref:    domain.TableRef{Namespace: "public", Name: "logs"},
+			columns: []domain.Column{
+				{Name: "name", DataType: "text"},
+				{Name: "note", DataType: "text", Nullable: true},
+			},
+			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "logs"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "name", Kind: domain.CellKindValue, Value: &note}, {Column: "note", Kind: domain.CellKindNull}}}, Column: "name", Value: domain.CellValue{Kind: domain.CellKindValue, Value: name}},
+			query:  `UPDATE "public"."logs" SET "name" = $1 WHERE "name" = $2 AND "note" IS NULL`,
+			args:   []driver.NamedValue{{Ordinal: 1, Value: "after"}, {Ordinal: 2, Value: "before"}},
+		},
+		{
+			name:   "複合主キー更新は編集前の全主キー値を使う",
+			dbType: domain.DBTypePostgres,
+			ref:    domain.TableRef{Namespace: "public", Name: "pairs"},
+			columns: []domain.Column{
+				{Name: "part_a", DataType: "int4", IsPrimaryKey: true},
+				{Name: "part_b", DataType: "int4", IsPrimaryKey: true},
+				{Name: "name", DataType: "text"},
+			},
+			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "pairs"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "part_a", Kind: domain.CellKindValue, Value: &partA}, {Column: "part_b", Kind: domain.CellKindValue, Value: &partB}}}, Column: "part_a", Value: domain.CellValue{Kind: domain.CellKindValue, Value: "11"}},
+			query:  `UPDATE "public"."pairs" SET "part_a" = $1 WHERE "part_a" = $2 AND "part_b" = $3`,
+			args:   []driver.NamedValue{{Ordinal: 1, Value: "11"}, {Ordinal: 2, Value: "10"}, {Ordinal: 3, Value: "20"}},
+		},
+		{
+			name:   "バイナリーJSON日時を更新値と位置指定値へ変換する",
+			dbType: domain.DBTypePostgres,
+			ref:    domain.TableRef{Namespace: "public", Name: "row_values"},
+			columns: []domain.Column{
+				{Name: "binary_data", DataType: "bytea"},
+				{Name: "metadata", DataType: "json"},
+				{Name: "occurred_at", DataType: "timestamp"},
+			},
+			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "row_values"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "binary_data", Kind: domain.CellKindValue, Value: &encodedOld}, {Column: "metadata", Kind: domain.CellKindValue, Value: &metadata}, {Column: "occurred_at", Kind: domain.CellKindValue, Value: &occurredAt}}}, Column: "binary_data", Value: domain.CellValue{Kind: domain.CellKindValue, Value: encodedNew}},
+			query:  `UPDATE "public"."row_values" SET "binary_data" = $1 WHERE "binary_data" = $2 AND "metadata" = $3 AND "occurred_at" = $4`,
+			args:   []driver.NamedValue{{Ordinal: 1, Value: []byte("new")}, {Ordinal: 2, Value: []byte("old")}, {Ordinal: 3, Value: metadata}, {Ordinal: 4, Value: parsedOccurredAt}},
+		},
+		{
+			name:      "Exec失敗を返す",
+			dbType:    domain.DBTypePostgres,
+			ref:       domain.TableRef{Namespace: "public", Name: "items"},
+			columns:   []domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "name", DataType: "text"}},
+			change:    domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "name", Value: domain.CellValue{Kind: domain.CellKindValue, Value: name}},
+			query:     `UPDATE "public"."items" SET "name" = $1 WHERE "id" = $2`,
+			execError: errors.New("password=secret"),
+			wantError: "password=secret",
+		},
+		{
+			name:            "更新件数取得失敗を返す",
+			dbType:          domain.DBTypePostgres,
+			ref:             domain.TableRef{Namespace: "public", Name: "items"},
+			columns:         []domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "name", DataType: "text"}},
+			change:          domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "name", Value: domain.CellValue{Kind: domain.CellKindValue, Value: name}},
+			query:           `UPDATE "public"."items" SET "name" = $1 WHERE "id" = $2`,
+			rowsAffectedErr: errors.New("affected rows failed"),
+			wantError:       "affected rows failed",
+		},
+		{
+			name:   "NULL更新を実行する",
+			dbType: domain.DBTypePostgres,
+			ref:    domain.TableRef{Namespace: "public", Name: "items"},
+			columns: []domain.Column{
+				{Name: "id", DataType: "int4", IsPrimaryKey: true},
+				{Name: "note", DataType: "text", Nullable: true},
+			},
+			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "note", Value: domain.CellValue{Kind: domain.CellKindNull}},
+			query:  `UPDATE "public"."items" SET "note" = $1 WHERE "id" = $2`,
+			args:   []driver.NamedValue{{Ordinal: 1, Value: nil}, {Ordinal: 2, Value: "1"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			responses := updateCellStructureResponses(tt.dbType, tt.columns)
+			responses = append(responses, inspectionTestResponse{query: tt.query, args: tt.args, execAffected: 1, rowsAffectedErr: tt.rowsAffectedErr, err: tt.execError, errorAt: -1})
+			database, scenario := newInspectionTestDatabase(t, responses)
+
+			got, err := updateCell(context.Background(), database, tt.dbType, tt.ref, tt.change)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Errorf("updateCell() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("updateCell() error = %v", err)
+			}
+			if got.AffectedRows != 1 {
+				t.Errorf("AffectedRows = %d, want 1", got.AffectedRows)
+			}
+			assertInspectionQueriesConsumed(t, scenario)
+		})
+	}
+}
+
+// テーブルセル更新構造取得応答
+func updateCellStructureResponses(dbType domain.DBType, columns []domain.Column) []inspectionTestResponse {
+	if dbType == domain.DBTypeMySQL {
+		values := make([][]driver.Value, 0, len(columns))
+		for _, column := range columns {
+			values = append(values, []driver.Value{column.Name, column.DataType, column.Nullable, column.DefaultValue, column.IsGenerated, column.IsPrimaryKey, false, false})
+		}
+
+		return []inspectionTestResponse{
+			{query: mysqlTableStructureColumnQuery, columns: []string{"column_name", "column_type", "is_nullable", "column_default", "extra", "column_key", "is_foreign", "is_unique"}, values: values, errorAt: -1},
+			{query: mysqlTableStructureForeignKeyQuery, columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"}, values: [][]driver.Value{}, errorAt: -1},
+			{query: mysqlTableStructureIndexQuery, columns: []string{"index_name", "column_name", "non_unique", "index_type"}, values: [][]driver.Value{}, errorAt: -1},
+		}
+	}
+
+	values := make([][]driver.Value, 0, len(columns))
+	for _, column := range columns {
+		values = append(values, []driver.Value{column.Name, column.DataType, column.Nullable, column.DefaultValue, column.IsGenerated, column.IsPrimaryKey, false, false})
+	}
+
+	return []inspectionTestResponse{
+		{query: postgresTableStructureColumnQuery, columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"}, values: values, errorAt: -1},
+		{query: postgresTableStructureForeignKeyQuery, columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"}, values: [][]driver.Value{}, errorAt: -1},
+		{query: postgresTableStructureIndexQuery, columns: []string{"relname", "attname", "indisunique", "amname"}, values: [][]driver.Value{}, errorAt: -1},
 	}
 }

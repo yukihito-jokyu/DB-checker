@@ -965,6 +965,22 @@ func (r *AppRepository) InsertRow(ctx context.Context, profile domain.Profile, p
 	return insertRow(ctx, database, profile.DBType, ref, row)
 }
 
+// テーブルセル更新
+func (r *AppRepository) UpdateCell(ctx context.Context, profile domain.Profile, password string, ref domain.TableRef, change domain.CellUpdate) (domain.AffectedRows, error) {
+	driverName, dsn := connectionDSN(profile, password)
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+	defer database.Close()
+
+	if err := database.PingContext(ctx); err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	return updateCell(ctx, database, profile.DBType, ref, change)
+}
+
 // テーブル行追加実行
 func insertRow(ctx context.Context, database *sql.DB, dbType domain.DBType, ref domain.TableRef, row domain.InsertRow) (domain.AffectedRows, error) {
 	structure, err := inspectTableStructure(ctx, database, dbType, ref)
@@ -1030,7 +1046,91 @@ func insertRow(ctx context.Context, database *sql.DB, dbType domain.DBType, ref 
 
 	affectedRows, err := result.RowsAffected()
 	if err != nil {
-		// 単体テスト到達不可: database/sql の Exec 成功後に RowsAffected はエラーを返さないため。
+		return domain.AffectedRows{}, err
+	}
+
+	return domain.AffectedRows{AffectedRows: affectedRows}, nil
+}
+
+// テーブルセル更新実行
+func updateCell(ctx context.Context, database *sql.DB, dbType domain.DBType, ref domain.TableRef, change domain.CellUpdate) (domain.AffectedRows, error) {
+	structure, err := inspectTableStructure(ctx, database, dbType, ref)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	columns := make(map[string]domain.Column, len(structure.Table.Columns))
+	for _, column := range structure.Table.Columns {
+		columns[column.Name] = column
+	}
+	target, found := columns[change.Column]
+	if !found {
+		return domain.AffectedRows{}, fmt.Errorf("%w: unknown column %s", domain.ErrInvalidRowInput, change.Column)
+	}
+
+	args := make([]any, 0, len(change.Locator.Values)+1)
+	switch change.Value.Kind {
+	case domain.CellKindNull:
+		args = append(args, nil)
+	case domain.CellKindValue:
+		converted, err := convertInputValue(change.Value.Value, target.DataType)
+		if err != nil {
+			return domain.AffectedRows{}, err
+		}
+		args = append(args, converted)
+	}
+
+	conditions := make([]string, 0, len(change.Locator.Values))
+	parameterIndex := 1
+	if change.Value.Kind != domain.CellKindDefault {
+		parameterIndex++
+	}
+	for _, locator := range change.Locator.Values {
+		column, found := columns[locator.Column]
+		if !found {
+			return domain.AffectedRows{}, fmt.Errorf("%w: unknown locator column %s", domain.ErrInvalidRowInput, locator.Column)
+		}
+
+		quotedColumn := quoteIdentifier(dbType, locator.Column)
+		if locator.Kind == domain.CellKindNull {
+			conditions = append(conditions, quotedColumn+" IS NULL")
+
+			continue
+		}
+		if locator.Value == nil {
+			return domain.AffectedRows{}, fmt.Errorf("%w: missing locator value for column %s", domain.ErrInvalidRowInput, locator.Column)
+		}
+
+		converted, err := convertInputValue(*locator.Value, column.DataType)
+		if err != nil {
+			return domain.AffectedRows{}, err
+		}
+		conditions = append(conditions, fmt.Sprintf("%s = %s", quotedColumn, tableRowsPlaceholder(dbType, parameterIndex)))
+		args = append(args, converted)
+		parameterIndex++
+	}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("UPDATE ")
+	queryBuilder.WriteString(qualifiedIdentifier(dbType, ref.Namespace, ref.Name))
+	queryBuilder.WriteString(" SET ")
+	queryBuilder.WriteString(quoteIdentifier(dbType, change.Column))
+	queryBuilder.WriteString(" = ")
+	if change.Value.Kind == domain.CellKindDefault {
+		queryBuilder.WriteString("DEFAULT")
+	} else {
+		queryBuilder.WriteString(tableRowsPlaceholder(dbType, 1))
+	}
+	queryBuilder.WriteString(" WHERE ")
+	queryBuilder.WriteString(strings.Join(conditions, " AND "))
+	query := queryBuilder.String()
+	result, err := database.ExecContext(ctx, query, args...)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	affectedRows, err := result.RowsAffected()
+	if err != nil {
 		return domain.AffectedRows{}, err
 	}
 
@@ -1051,6 +1151,24 @@ func convertInputValue(value string, dataType string) (any, error) {
 	if strings.Contains(lowerType, "json") && !json.Valid([]byte(value)) {
 		return nil, fmt.Errorf("%w: invalid json value", domain.ErrInvalidRowInput)
 	}
+	if isDateTimeDataType(lowerType) {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid RFC3339 value for date/time column", domain.ErrInvalidRowInput)
+		}
+
+		return parsed, nil
+	}
 
 	return value, nil
+}
+
+// 日時型判定
+func isDateTimeDataType(dataType string) bool {
+	baseType := strings.Fields(dataType)
+	if len(baseType) == 0 {
+		return false
+	}
+
+	return strings.HasPrefix(baseType[0], "timestamp") || strings.HasPrefix(baseType[0], "datetime") || strings.HasPrefix(baseType[0], "date") || strings.HasPrefix(baseType[0], "time")
 }
