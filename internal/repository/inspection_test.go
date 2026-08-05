@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 )
@@ -1457,6 +1458,708 @@ func TestTableStructureQueries(t *testing.T) {
 			}
 			if indexQuery == "" {
 				t.Error("tableStructureQueries() index query = empty, want non-empty")
+			}
+		})
+	}
+}
+
+// テーブル行問い合わせ検証
+func TestListRows(t *testing.T) {
+	query := domain.TableQuery{
+		Table: domain.TableRef{
+			Namespace: "public",
+			Name:      "users",
+		},
+		Page: 2,
+		Columns: []domain.Column{
+			{
+				Name:         "id",
+				DataType:     "int",
+				IsPrimaryKey: true,
+			},
+			{
+				Name:     "name",
+				DataType: "varchar",
+			},
+			{
+				Name:     "payload",
+				DataType: "json",
+			},
+			{
+				Name:     "binary",
+				DataType: "bytea",
+			},
+		},
+	}
+	tests := []struct {
+		name      string
+		dbType    domain.DBType
+		query     domain.TableQuery
+		responses []inspectionTestResponse
+		want      domain.TableRows
+		wantError string
+	}{
+		{
+			name:   "PostgreSQLの固定ページを返す",
+			dbType: domain.DBTypePostgres,
+			responses: []inspectionTestResponse{
+				{
+					query:   `SELECT COUNT(*) FROM "public"."users"`,
+					columns: []string{"count"},
+					values: [][]driver.Value{
+						{int64(101)},
+					},
+					errorAt: -1,
+				},
+				{
+					query: `SELECT "id", "name", "payload", "binary" FROM "public"."users" ORDER BY "id" ASC LIMIT $1 OFFSET $2`,
+					columns: []string{
+						"id",
+						"name",
+						"payload",
+						"binary",
+					},
+					values: [][]driver.Value{
+						{
+							int64(101),
+							"Ada",
+							`{"enabled":true}`,
+							[]byte{
+								1,
+								2,
+							},
+						},
+					},
+					errorAt: -1,
+				},
+			},
+			want: domain.TableRows{
+				Rows: []domain.TableRow{
+					{
+						Cells: []domain.CellValue{
+							{
+								Kind:  domain.CellKindValue,
+								Value: "101",
+							},
+							{
+								Kind:  domain.CellKindValue,
+								Value: "Ada",
+							},
+							{
+								Kind:  domain.CellKindValue,
+								Value: `{"enabled":true}`,
+							},
+							{
+								Kind:  domain.CellKindValue,
+								Value: "AQI=",
+							},
+						},
+					},
+				},
+				TotalCount: 101,
+				Page:       2,
+				PageSize:   100,
+			},
+		},
+		{
+			name:   "不正問い合わせを返す",
+			dbType: domain.DBTypePostgres,
+			query: domain.TableQuery{
+				Table: domain.TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+			},
+			wantError: domain.ErrInvalidTableQuery.Error(),
+		},
+		{
+			name:   "件数問い合わせ失敗を返す",
+			dbType: domain.DBTypePostgres,
+			responses: []inspectionTestResponse{
+				{
+					query: `SELECT COUNT(*) FROM "public"."users"`,
+					err:   errors.New("count failed"),
+				},
+			},
+			wantError: "count failed",
+		},
+		{
+			name:   "行問い合わせ失敗を返す",
+			dbType: domain.DBTypePostgres,
+			responses: []inspectionTestResponse{
+				{
+					query:   `SELECT COUNT(*) FROM "public"."users"`,
+					columns: []string{"count"},
+					values: [][]driver.Value{
+						{int64(1)},
+					},
+					errorAt: -1,
+				},
+				{
+					query: `SELECT "id", "name", "payload", "binary" FROM "public"."users" ORDER BY "id" ASC LIMIT $1 OFFSET $2`,
+					err:   errors.New("rows failed"),
+				},
+			},
+			wantError: "rows failed",
+		},
+		{
+			name:   "行走査失敗を返す",
+			dbType: domain.DBTypePostgres,
+			responses: []inspectionTestResponse{
+				{
+					query:   `SELECT COUNT(*) FROM "public"."users"`,
+					columns: []string{"count"},
+					values: [][]driver.Value{
+						{int64(1)},
+					},
+					errorAt: -1,
+				},
+				{
+					query: `SELECT "id", "name", "payload", "binary" FROM "public"."users" ORDER BY "id" ASC LIMIT $1 OFFSET $2`,
+					columns: []string{
+						"id",
+						"name",
+						"payload",
+					},
+					values: [][]driver.Value{
+						{
+							int64(1),
+							"Ada",
+							"{}",
+						},
+					},
+					errorAt: -1,
+				},
+			},
+			wantError: "expected 3 destination arguments in Scan, not 4",
+		},
+		{
+			name:   "行反復失敗を返す",
+			dbType: domain.DBTypePostgres,
+			responses: []inspectionTestResponse{
+				{
+					query:   `SELECT COUNT(*) FROM "public"."users"`,
+					columns: []string{"count"},
+					values: [][]driver.Value{
+						{int64(1)},
+					},
+					errorAt: -1,
+				},
+				{
+					query: `SELECT "id", "name", "payload", "binary" FROM "public"."users" ORDER BY "id" ASC LIMIT $1 OFFSET $2`,
+					columns: []string{
+						"id",
+						"name",
+						"payload",
+						"binary",
+					},
+					rowErr:  errors.New("iteration failed"),
+					errorAt: 0,
+				},
+			},
+			wantError: "iteration failed",
+		},
+		{
+			name:   "MySQLの固定ページを返す",
+			dbType: domain.DBTypeMySQL,
+			responses: []inspectionTestResponse{
+				{
+					query:   "SELECT COUNT(*) FROM `public`.`users`",
+					columns: []string{"count"},
+					values: [][]driver.Value{
+						{int64(0)},
+					},
+					errorAt: -1,
+				},
+				{
+					query: "SELECT `id`, `name`, `payload`, `binary` FROM `public`.`users` ORDER BY `id` ASC LIMIT ? OFFSET ?",
+					columns: []string{
+						"id",
+						"name",
+						"payload",
+						"binary",
+					},
+					errorAt: -1,
+				},
+			},
+			want: domain.TableRows{
+				Rows:       []domain.TableRow{},
+				TotalCount: 0,
+				Page:       2,
+				PageSize:   domain.TablePageSize,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			currentQuery := query
+			if tt.query.Table.Name != "" {
+				currentQuery = tt.query
+			}
+			database, scenario := newInspectionTestDatabase(t, tt.responses)
+			got, err := listRows(context.Background(), database, tt.dbType, currentQuery)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Errorf("listRows() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("listRows() error = %v", err)
+			}
+			if !reflect.DeepEqual(got.Rows, tt.want.Rows) {
+				t.Errorf("Rows = %#v, want %#v", got.Rows, tt.want.Rows)
+			}
+			if got.TotalCount != tt.want.TotalCount {
+				t.Errorf("TotalCount = %d, want %d", got.TotalCount, tt.want.TotalCount)
+			}
+			if got.Page != tt.want.Page {
+				t.Errorf("Page = %d, want %d", got.Page, tt.want.Page)
+			}
+			if got.PageSize != tt.want.PageSize {
+				t.Errorf("PageSize = %d, want %d", got.PageSize, tt.want.PageSize)
+			}
+			assertInspectionQueriesConsumed(t, scenario)
+		})
+	}
+}
+
+// セル値変換検証
+func TestTableCellValue(t *testing.T) {
+	timestamp := time.Date(2026, time.August, 5, 12, 34, 56, 0, time.UTC)
+	tests := []struct {
+		name   string
+		value  any
+		column domain.Column
+		want   domain.CellValue
+	}{
+		{
+			name:  "MySQL日時をRFC3339で返す",
+			value: timestamp,
+			column: domain.Column{
+				Name:     "created_at",
+				DataType: "datetime",
+			},
+			want: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: "2026-08-05T12:34:56Z",
+			},
+		},
+		{
+			name: "NULLをnullセルで返す",
+			column: domain.Column{
+				Name:     "note",
+				DataType: "varchar",
+			},
+			want: domain.CellValue{
+				Kind: domain.CellKindNull,
+			},
+		},
+		{
+			name: "バイナリーをbase64で返す",
+			value: []byte{
+				1,
+				2,
+			},
+			column: domain.Column{
+				Name:     "payload",
+				DataType: "blob",
+			},
+			want: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: "AQI=",
+			},
+		},
+		{
+			name:  "テキストバイト列を文字列で返す",
+			value: []byte("Ada"),
+			column: domain.Column{
+				Name:     "name",
+				DataType: "varchar",
+			},
+			want: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: "Ada",
+			},
+		},
+		{
+			name:  "有効なJSONを文字列で返す",
+			value: `{"enabled":true}`,
+			column: domain.Column{
+				Name:     "payload",
+				DataType: "json",
+			},
+			want: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: `{"enabled":true}`,
+			},
+		},
+		{
+			name:  "不正なJSONを文字列で返す",
+			value: "{",
+			column: domain.Column{
+				Name:     "payload",
+				DataType: "json",
+			},
+			want: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: "{",
+			},
+		},
+		{
+			name:  "数値を文字列で返す",
+			value: int64(42),
+			column: domain.Column{
+				Name:     "id",
+				DataType: "int",
+			},
+			want: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: "42",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tableCellValue(tt.value, tt.column); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("tableCellValue() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// テーブル行並び替え生成検証
+func TestTableRowsOrder(t *testing.T) {
+	columns := []domain.Column{
+		{
+			Name:         "tenant_id",
+			IsPrimaryKey: true,
+		},
+		{
+			Name:         "id",
+			IsPrimaryKey: true,
+		},
+		{Name: "name"},
+	}
+	tests := []struct {
+		name   string
+		dbType domain.DBType
+		query  domain.TableQuery
+		want   string
+	}{
+		{
+			name:   "指定並び替えを返す",
+			dbType: domain.DBTypePostgres,
+			query: domain.TableQuery{
+				Sort: &domain.TableSort{
+					Column:    "name",
+					Direction: domain.SortDirectionDescending,
+				},
+			},
+			want: ` ORDER BY "name" DESC`,
+		},
+		{
+			name:   "主キーの昇順を返す",
+			dbType: domain.DBTypeMySQL,
+			query: domain.TableQuery{
+				Columns: columns,
+			},
+			want: " ORDER BY `tenant_id` ASC, `id` ASC",
+		},
+		{
+			name:   "主キーなしは空文字を返す",
+			dbType: domain.DBTypePostgres,
+			query: domain.TableQuery{
+				Columns: []domain.Column{
+					{Name: "name"},
+				},
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tableRowsOrder(tt.dbType, tt.query); got != tt.want {
+				t.Errorf("tableRowsOrder() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// テーブル行条件生成検証
+func TestTableRowsWhere(t *testing.T) {
+	filter := &domain.FilterGroup{
+		Operator: domain.FilterGroupOperatorAnd,
+		Filters: []domain.TableFilter{
+			{
+				Column:   "status",
+				Operator: domain.FilterOperatorIn,
+				Values: []string{
+					"active",
+					"pending",
+				},
+			},
+			{
+				Column:   "created_at",
+				Operator: domain.FilterOperatorBetween,
+				Values: []string{
+					"2026-01-01",
+					"2026-01-31",
+				},
+			},
+			{
+				Column:   "deleted_at",
+				Operator: domain.FilterOperatorIsNull,
+			},
+		},
+		Groups: []domain.FilterGroup{
+			{
+				Operator: domain.FilterGroupOperatorOr,
+				Filters: []domain.TableFilter{
+					{
+						Column:   "name",
+						Operator: domain.FilterOperatorLike,
+						Values:   []string{"A%"},
+					},
+					{
+						Column:   "role",
+						Operator: domain.FilterOperatorNotEqual,
+						Values:   []string{"guest"},
+					},
+				},
+			},
+		},
+	}
+	multipleGroupsFilter := &domain.FilterGroup{
+		Operator: domain.FilterGroupOperatorAnd,
+		Filters: []domain.TableFilter{
+			{
+				Column:   "tenant_id",
+				Operator: domain.FilterOperatorEqual,
+				Values:   []string{"tenant-1"},
+			},
+		},
+		Groups: []domain.FilterGroup{
+			{
+				Operator: domain.FilterGroupOperatorOr,
+				Filters: []domain.TableFilter{
+					{
+						Column:   "status",
+						Operator: domain.FilterOperatorEqual,
+						Values:   []string{"active"},
+					},
+				},
+				Groups: []domain.FilterGroup{
+					{
+						Operator: domain.FilterGroupOperatorAnd,
+						Filters: []domain.TableFilter{
+							{
+								Column:   "role",
+								Operator: domain.FilterOperatorEqual,
+								Values:   []string{"admin"},
+							},
+						},
+					},
+				},
+			},
+			{
+				Operator: domain.FilterGroupOperatorAnd,
+				Filters: []domain.TableFilter{
+					{
+						Column:   "enabled",
+						Operator: domain.FilterOperatorEqual,
+						Values:   []string{"true"},
+					},
+				},
+			},
+		},
+	}
+	tests := []struct {
+		name      string
+		dbType    domain.DBType
+		filter    *domain.FilterGroup
+		wantWhere string
+		wantArgs  []any
+	}{
+		{
+			name:      "フィルターなしは空条件を返す",
+			dbType:    domain.DBTypePostgres,
+			wantWhere: "",
+		},
+		{
+			name:      "PostgreSQL条件と引数を返す",
+			dbType:    domain.DBTypePostgres,
+			filter:    filter,
+			wantWhere: ` WHERE "status" IN ($1, $2) AND "created_at" BETWEEN $3 AND $4 AND "deleted_at" IS NULL AND ("name" LIKE $5 OR "role" != $6)`,
+			wantArgs: []any{
+				"active",
+				"pending",
+				"2026-01-01",
+				"2026-01-31",
+				"A%",
+				"guest",
+			},
+		},
+		{
+			name:      "MySQL条件と引数を返す",
+			dbType:    domain.DBTypeMySQL,
+			filter:    filter,
+			wantWhere: " WHERE `status` IN (?, ?) AND `created_at` BETWEEN ? AND ? AND `deleted_at` IS NULL AND (`name` LIKE ? OR `role` != ?)",
+			wantArgs: []any{
+				"active",
+				"pending",
+				"2026-01-01",
+				"2026-01-31",
+				"A%",
+				"guest",
+			},
+		},
+		{
+			name:      "PostgreSQLの複数子グループを連番で返す",
+			dbType:    domain.DBTypePostgres,
+			filter:    multipleGroupsFilter,
+			wantWhere: ` WHERE "tenant_id" = $1 AND ("status" = $2 OR ("role" = $3)) AND ("enabled" = $4)`,
+			wantArgs: []any{
+				"tenant-1",
+				"active",
+				"admin",
+				"true",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotWhere, gotArgs := tableRowsWhere(tt.dbType, tt.filter)
+			if gotWhere != tt.wantWhere {
+				t.Errorf("tableRowsWhere() where = %q, want %q", gotWhere, tt.wantWhere)
+			}
+			if !reflect.DeepEqual(gotArgs, tt.wantArgs) {
+				t.Errorf("tableRowsWhere() args = %#v, want %#v", gotArgs, tt.wantArgs)
+			}
+		})
+	}
+}
+
+// テーブル行プレースホルダー生成検証
+func TestTableRowsPlaceholder(t *testing.T) {
+	tests := []struct {
+		name      string
+		dbType    domain.DBType
+		parameter int
+		want      string
+	}{
+		{
+			name:      "MySQLは疑問符を返す",
+			dbType:    domain.DBTypeMySQL,
+			parameter: 3,
+			want:      "?",
+		},
+		{
+			name:      "PostgreSQLは番号付き記号を返す",
+			dbType:    domain.DBTypePostgres,
+			parameter: 3,
+			want:      "$3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tableRowsPlaceholder(tt.dbType, tt.parameter); got != tt.want {
+				t.Errorf("tableRowsPlaceholder() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// テーブル行取得メタデータ接続検証
+func TestAppRepositoryListRows(t *testing.T) {
+	profile := connectionTestProfile(t, domain.DBTypePostgres)
+	query := domain.TableQuery{
+		Table: domain.TableRef{
+			Namespace: "public",
+			Name:      "items",
+		},
+		Page: 1,
+		Columns: []domain.Column{
+			{
+				Name:         "id",
+				DataType:     "int",
+				IsPrimaryKey: true,
+			},
+		},
+	}
+	originalOpenDatabase := openDatabase
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+	tests := []struct {
+		name      string
+		open      func(string, string) (*sql.DB, error)
+		ctx       context.Context
+		wantError string
+		wantCount int64
+	}{
+		{
+			name: "接続生成失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			ctx:       context.Background(),
+			wantError: "open failed",
+		},
+		{
+			name: "接続確認失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, nil)
+
+				return database, nil
+			},
+			ctx:       canceledInspectionContext(),
+			wantError: context.Canceled.Error(),
+		},
+		{
+			name: "行一覧を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   `SELECT COUNT(*) FROM "public"."items"`,
+						columns: []string{"count"},
+						values: [][]driver.Value{
+							{int64(0)},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   `SELECT "id" FROM "public"."items" ORDER BY "id" ASC LIMIT $1 OFFSET $2`,
+						columns: []string{"id"},
+						errorAt: -1,
+					},
+				})
+
+				return database, nil
+			},
+			ctx:       context.Background(),
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openDatabase = tt.open
+			got, err := NewAppRepository(nil).ListRows(tt.ctx, profile, "secret", query)
+			if tt.wantError != "" {
+				if err == nil || err.Error() != tt.wantError {
+					t.Errorf("ListRows() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListRows() error = %v", err)
+			}
+			if got.TotalCount != tt.wantCount {
+				t.Errorf("ListRows() TotalCount = %d, want %d", got.TotalCount, tt.wantCount)
 			}
 		})
 	}
