@@ -23,6 +23,8 @@ type schemaRepositoryStub struct {
 	credentialFound bool
 	schema          domain.Schema
 	inspectErr      error
+	structure       domain.TableStructure
+	structureErr    error
 	flowState       domain.FlowState
 	flowStateErr    error
 }
@@ -62,6 +64,11 @@ func (*schemaRepositoryStub) CheckConnection(context.Context, domain.Profile, st
 // スキーマ取得再現
 func (s *schemaRepositoryStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
 	return s.schema, s.inspectErr
+}
+
+// テーブル構造取得再現
+func (s *schemaRepositoryStub) InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error) {
+	return s.structure, s.structureErr
 }
 
 // データベーススキーマ取得レスポンス検証
@@ -162,6 +169,83 @@ func TestAppHandlerGetDatabaseSchema(t *testing.T) {
 			}
 			if got.Error == nil {
 				t.Fatal("GetDatabaseSchema() Error = nil, want non-nil")
+			}
+			if got.Error.Code != string(tt.wantCode) {
+				t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+			}
+			if strings.Contains(got.Error.Message, "secret") || strings.Contains(got.Error.Message, "dsn=") {
+				t.Errorf("Error.Message = %q, want no secret", got.Error.Message)
+			}
+			if tt.wantLog {
+				assertSafeSchemaFailureLog(t, output.String())
+			}
+		})
+	}
+}
+
+// テーブル構造レスポンス検証
+func TestAppHandlerGetTableStructure(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	defaultValue := "generated default"
+	structure := domain.TableStructure{
+		Table:   domain.Table{Namespace: "public", Name: "items", Columns: []domain.Column{{Name: "id", DataType: "int4", DefaultValue: &defaultValue, IsPrimaryKey: true, IsUnique: true, IsGenerated: true}}},
+		Indexes: []domain.Index{{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"}},
+	}
+	tests := []struct {
+		name       string
+		table      string
+		repository schemaRepositoryStub
+		wantCode   apperr.Code
+		wantData   bool
+		wantLog    bool
+	}{
+		{
+			name:  "詳細DTOの全フィールドを返す",
+			table: "items",
+			repository: schemaRepositoryStub{
+				profile:         profile,
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+			},
+			wantData: true,
+		},
+		{
+			name:  "失敗を安全なエラーとコードログで返す",
+			table: "items",
+			repository: schemaRepositoryStub{
+				profile:         profile,
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structureErr:    errors.New("dsn=postgres://password=secret query failed"),
+			},
+			wantCode: apperr.CodeSchemaLoadFailed,
+			wantLog:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			logger := applogger.NewWithWriter(&output, slog.LevelDebug)
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), usecase.NewAppUseCase(&tt.repository))
+			got := handler.GetTableStructure(tt.table)
+			if tt.wantData {
+				if got.Data == nil {
+					t.Fatal("GetTableStructure() Data = nil, want non-nil")
+				}
+				if got.Error != nil {
+					t.Errorf("GetTableStructure() Error = %#v, want nil", got.Error)
+				}
+				if got.Data.Table.Namespace != "public" || got.Data.Table.Name != "items" || len(got.Data.Table.Columns) != 1 || got.Data.Table.Columns[0].DefaultValue == nil || *got.Data.Table.Columns[0].DefaultValue != defaultValue || !got.Data.Table.Columns[0].IsGenerated || len(got.Data.Indexes) != 1 || got.Data.Indexes[0].Kind != "btree" {
+					t.Errorf("GetTableStructure() Data = %#v, want detailed table structure", got.Data)
+				}
+
+				return
+			}
+			if got.Error == nil {
+				t.Fatal("GetTableStructure() Error = nil, want non-nil")
 			}
 			if got.Error.Code != string(tt.wantCode) {
 				t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
