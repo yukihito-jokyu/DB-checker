@@ -181,6 +181,117 @@ func TestAppHandlerLoadFlowState(t *testing.T) {
 	}
 }
 
+// フロー状態保存レスポンス検証
+func TestAppHandlerSaveFlowState(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	request := SaveFlowStateRequest{
+		Version: domain.FlowStateVersion,
+		TableStates: map[string]TableFlowStateRequest{
+			"users": {X: 100.5, Y: -20, Expanded: true},
+		},
+	}
+	tests := []struct {
+		name       string
+		repository connectionProfileRepositoryStub
+		request    SaveFlowStateRequest
+		useCaseNil bool
+		wantCode   apperr.Code
+		wantData   bool
+		wantLog    bool
+	}{
+		{
+			name: "フロー状態DTOを保存して返す",
+			repository: connectionProfileRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request:  request,
+			wantData: true,
+		},
+		{
+			name: "不正な入力を安全なエラーで返す",
+			repository: connectionProfileRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request: SaveFlowStateRequest{
+				Version:     domain.FlowStateVersion + 1,
+				TableStates: map[string]TableFlowStateRequest{},
+			},
+			wantCode: apperr.CodeValidationFailed,
+			wantLog:  true,
+		},
+		{
+			name: "保存失敗を安全なエラーとエラーコードログで返す",
+			repository: connectionProfileRepositoryStub{
+				profiles:    []domain.Profile{profile},
+				activeID:    stringPointer(profile.ID),
+				saveFlowErr: errors.New("config path=/private/secret/config.json failed"),
+			},
+			request:  request,
+			wantCode: apperr.CodeUnexpected,
+			wantLog:  true,
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			request:    request,
+			useCaseNil: true,
+			wantCode:   apperr.CodeConfigReadFailed,
+			wantLog:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			logger := applogger.NewWithWriter(&output, slog.LevelDebug)
+			var appUseCase *usecase.AppUseCase
+			if !tt.useCaseNil {
+				appUseCase = usecase.NewAppUseCase(&tt.repository)
+			}
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+
+			got := handler.SaveFlowState(tt.request)
+			if tt.wantData {
+				if got.Data == nil {
+					t.Fatal("SaveFlowState() Data = nil, want non-nil")
+				}
+				if got.Error != nil {
+					t.Errorf("SaveFlowState() Error = %#v, want nil", got.Error)
+				}
+				if !reflect.DeepEqual(*got.Data, toFlowStateResponse(toFlowState(tt.request))) {
+					t.Errorf("SaveFlowState() Data = %#v, want %#v", *got.Data, toFlowStateResponse(toFlowState(tt.request)))
+				}
+				if gotProfileID := tt.repository.savedFlowID; gotProfileID != profile.ID {
+					t.Errorf("SaveFlowState() profile ID = %q, want %q", gotProfileID, profile.ID)
+				}
+
+				return
+			}
+			if got.Data != nil {
+				t.Errorf("SaveFlowState() Data = %#v, want nil", got.Data)
+			}
+			if got.Error == nil {
+				t.Fatal("SaveFlowState() Error = nil, want non-nil")
+			}
+			if got.Error.Code != string(tt.wantCode) {
+				t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+			}
+			if strings.Contains(got.Error.Message, "secret") || strings.Contains(got.Error.Message, "path=") {
+				t.Errorf("Error.Message = %q, want no sensitive detail", got.Error.Message)
+			}
+			if tt.wantLog {
+				if !strings.Contains(output.String(), "code="+string(tt.wantCode)) {
+					t.Errorf("log = %q, want code=%s", output.String(), tt.wantCode)
+				}
+				if strings.Contains(output.String(), "secret") || strings.Contains(output.String(), "path=") {
+					t.Errorf("log = %q, want no sensitive detail", output.String())
+				}
+			}
+		})
+	}
+}
+
 // 接続プロファイル一覧取得
 func TestAppHandlerListConnectionProfiles(t *testing.T) {
 	tests := []struct {
