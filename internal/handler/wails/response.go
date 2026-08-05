@@ -98,6 +98,48 @@ type TableStructureResponse struct {
 	Indexes     []TableStructureIndexResponse `json:"indexes"`
 }
 
+type StatisticCountResponse struct {
+	Value  *int64  `json:"value"`
+	Status string  `json:"status"`
+	Reason *string `json:"reason"`
+}
+
+type StatisticValueResponse struct {
+	Value  *string `json:"value"`
+	Status string  `json:"status"`
+	Reason *string `json:"reason"`
+}
+
+type ColumnStatisticsResponse struct {
+	Name           string                 `json:"name"`
+	NullCount      StatisticCountResponse `json:"nullCount"`
+	DistinctCount  StatisticCountResponse `json:"distinctCount"`
+	DuplicateCount StatisticCountResponse `json:"duplicateCount"`
+	Min            StatisticValueResponse `json:"min"`
+	Max            StatisticValueResponse `json:"max"`
+}
+
+type ForeignKeyStatisticsResponse struct {
+	Name                  string                 `json:"name"`
+	FromColumns           []string               `json:"fromColumns"`
+	ToTable               string                 `json:"toTable"`
+	ToColumns             []string               `json:"toColumns"`
+	SourceRowCount        StatisticCountResponse `json:"sourceRowCount"`
+	NullCount             StatisticCountResponse `json:"nullCount"`
+	ReferencedRowCount    StatisticCountResponse `json:"referencedRowCount"`
+	MissingReferenceCount StatisticCountResponse `json:"missingReferenceCount"`
+}
+
+type TableStatisticsResponse struct {
+	Table       string                         `json:"table"`
+	RowCount    StatisticCountResponse         `json:"rowCount"`
+	ColumnCount int                            `json:"columnCount"`
+	CollectedAt *string                        `json:"collectedAt"`
+	Status      string                         `json:"status"`
+	Columns     []ColumnStatisticsResponse     `json:"columns"`
+	ForeignKeys []ForeignKeyStatisticsResponse `json:"foreignKeys"`
+}
+
 type DatabaseTableResponse struct {
 	Namespace string                   `json:"namespace"`
 	Name      string                   `json:"name"`

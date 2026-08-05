@@ -26,6 +26,10 @@ export function GetStatus() {
   return window['go']['wails']['AppHandler']['GetStatus']();
 }
 
+export function GetTableStatistics(arg1) {
+  return window['go']['wails']['AppHandler']['GetTableStatistics'](arg1);
+}
+
 export function GetTableStructure(arg1) {
   return window['go']['wails']['AppHandler']['GetTableStructure'](arg1);
 }

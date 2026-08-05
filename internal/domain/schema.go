@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var ErrInvalidSchema = errors.New("invalid schema")
@@ -41,6 +42,56 @@ type TableStructure struct {
 	Table       Table
 	ForeignKeys []ForeignKey
 	Indexes     []Index
+}
+
+type StatisticsStatus string
+
+const (
+	StatisticsStatusComplete    StatisticsStatus = "complete"
+	StatisticsStatusTimeout     StatisticsStatus = "timeout"
+	StatisticsStatusUnavailable StatisticsStatus = "unavailable"
+)
+
+type StatisticCount struct {
+	Value  *int64
+	Status StatisticsStatus
+	Reason *string
+}
+
+type StatisticValue struct {
+	Value  *string
+	Status StatisticsStatus
+	Reason *string
+}
+
+type ColumnStatistics struct {
+	Name           string
+	NullCount      StatisticCount
+	DistinctCount  StatisticCount
+	DuplicateCount StatisticCount
+	Min            StatisticValue
+	Max            StatisticValue
+}
+
+type ForeignKeyStatistics struct {
+	Name                  string
+	FromColumns           []string
+	ToTable               string
+	ToColumns             []string
+	SourceRowCount        StatisticCount
+	NullCount             StatisticCount
+	ReferencedRowCount    StatisticCount
+	MissingReferenceCount StatisticCount
+}
+
+type TableStatistics struct {
+	Table       TableRef
+	RowCount    StatisticCount
+	ColumnCount int
+	CollectedAt time.Time
+	Status      StatisticsStatus
+	Columns     []ColumnStatistics
+	ForeignKeys []ForeignKeyStatistics
 }
 
 type ForeignKey struct {

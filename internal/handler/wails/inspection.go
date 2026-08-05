@@ -3,6 +3,7 @@ package wails
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
@@ -48,6 +49,56 @@ func (h *AppHandler) GetTableStructure(table string) Response[TableStructureResp
 	}
 
 	return OK(toTableStructureResponse(structure))
+}
+
+// テーブル統計取得
+func (h *AppHandler) GetTableStatistics(table string) Response[TableStatisticsResponse] {
+	h.logger.Info(context.Background(), "table statistics requested", slog.String("operation", "table_statistics_get"))
+
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeStatsLoadFailed)
+		h.logFailureWithCode("table statistics get failed", "table_statistics_get", err)
+
+		return Fail[TableStatisticsResponse](err)
+	}
+
+	ctx, cancel, requestID := h.beginTableStatistics()
+	defer h.finishTableStatistics(requestID, cancel)
+
+	statistics, err := h.appUseCase.GetTableStatistics(ctx, table)
+	if err != nil {
+		h.logFailureWithCode("table statistics get failed", "table_statistics_get", err)
+
+		return Fail[TableStatisticsResponse](err)
+	}
+
+	return OK(toTableStatisticsResponse(statistics))
+}
+
+// 統計要求開始
+func (h *AppHandler) beginTableStatistics() (context.Context, context.CancelFunc, uint64) {
+	h.statisticsMu.Lock()
+	defer h.statisticsMu.Unlock()
+
+	if h.statisticsCancel != nil {
+		h.statisticsCancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	h.statisticsCancel = cancel
+	h.statisticsRequestID++
+
+	return ctx, cancel, h.statisticsRequestID
+}
+
+// 統計要求終了
+func (h *AppHandler) finishTableStatistics(requestID uint64, cancel context.CancelFunc) {
+	h.statisticsMu.Lock()
+	defer h.statisticsMu.Unlock()
+
+	if h.statisticsRequestID == requestID {
+		h.statisticsCancel = nil
+	}
+	cancel()
 }
 
 // データベーススキーマレスポンス変換
@@ -108,4 +159,34 @@ func toTableStructureResponse(structure domain.TableStructure) TableStructureRes
 		ForeignKeys: foreignKeys,
 		Indexes:     indexes,
 	}
+}
+
+// テーブル統計レスポンス変換
+func toTableStatisticsResponse(statistics domain.TableStatistics) TableStatisticsResponse {
+	columns := make([]ColumnStatisticsResponse, 0, len(statistics.Columns))
+	for _, column := range statistics.Columns {
+		columns = append(columns, ColumnStatisticsResponse{Name: column.Name, NullCount: toStatisticCountResponse(column.NullCount), DistinctCount: toStatisticCountResponse(column.DistinctCount), DuplicateCount: toStatisticCountResponse(column.DuplicateCount), Min: toStatisticValueResponse(column.Min), Max: toStatisticValueResponse(column.Max)})
+	}
+	foreignKeys := make([]ForeignKeyStatisticsResponse, 0, len(statistics.ForeignKeys))
+	for _, foreignKey := range statistics.ForeignKeys {
+		foreignKeys = append(foreignKeys, ForeignKeyStatisticsResponse{Name: foreignKey.Name, FromColumns: foreignKey.FromColumns, ToTable: foreignKey.ToTable, ToColumns: foreignKey.ToColumns, SourceRowCount: toStatisticCountResponse(foreignKey.SourceRowCount), NullCount: toStatisticCountResponse(foreignKey.NullCount), ReferencedRowCount: toStatisticCountResponse(foreignKey.ReferencedRowCount), MissingReferenceCount: toStatisticCountResponse(foreignKey.MissingReferenceCount)})
+	}
+
+	var collectedAt *string
+	if !statistics.CollectedAt.IsZero() {
+		formatted := statistics.CollectedAt.Format(time.RFC3339Nano)
+		collectedAt = &formatted
+	}
+
+	return TableStatisticsResponse{Table: statistics.Table.Name, RowCount: toStatisticCountResponse(statistics.RowCount), ColumnCount: statistics.ColumnCount, CollectedAt: collectedAt, Status: string(statistics.Status), Columns: columns, ForeignKeys: foreignKeys}
+}
+
+// 件数統計レスポンス変換
+func toStatisticCountResponse(statistic domain.StatisticCount) StatisticCountResponse {
+	return StatisticCountResponse{Value: statistic.Value, Status: string(statistic.Status), Reason: statistic.Reason}
+}
+
+// 値統計レスポンス変換
+func toStatisticValueResponse(statistic domain.StatisticValue) StatisticValueResponse {
+	return StatisticValueResponse{Value: statistic.Value, Status: string(statistic.Status), Reason: statistic.Reason}
 }

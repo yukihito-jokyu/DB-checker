@@ -80,6 +80,51 @@ func (u *AppUseCase) GetTableStructure(ctx context.Context, table string) (domai
 	return structure, nil
 }
 
+// テーブル統計取得
+func (u *AppUseCase) GetTableStatistics(ctx context.Context, table string) (domain.TableStatistics, error) {
+	profiles, activeID, err := u.repository.LoadProfiles()
+	if err != nil {
+		return domain.TableStatistics{}, err
+	}
+	if activeID == nil {
+		return domain.TableStatistics{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile, found := findProfile(profiles, *activeID)
+	if !found {
+		return domain.TableStatistics{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+	ref, err := domain.NewTableRef(schemaNamespace(profile), table)
+	if err != nil {
+		return domain.TableStatistics{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	credential, found, err := u.repository.GetCredential(profile.ID)
+	if err != nil {
+		return domain.TableStatistics{}, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+	if !found {
+		return domain.TableStatistics{}, apperr.Wrap(apperr.CodeCredentialUnavailable, errors.New("credential not found"))
+	}
+
+	statistics, err := u.repository.InspectTableStatistics(ctx, profile, credential, ref)
+	if err != nil {
+		if contextError := apperr.FromContextError(err); contextError != nil {
+			if contextError.Code == apperr.CodeOperationTimeout {
+				statistics.Status = domain.StatisticsStatusTimeout
+
+				return statistics, nil
+			}
+
+			return domain.TableStatistics{}, contextError
+		}
+
+		return domain.TableStatistics{}, apperr.Wrap(apperr.CodeStatsLoadFailed, err)
+	}
+
+	return statistics, nil
+}
+
 // 対象名前空間取得
 func schemaNamespace(profile domain.Profile) string {
 	if profile.DBType == domain.DBTypeMySQL {

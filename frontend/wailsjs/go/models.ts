@@ -20,6 +20,78 @@ export namespace wails {
 	        this.schema = source["schema"];
 	    }
 	}
+	export class StatisticValueResponse {
+	    value?: string;
+	    status: string;
+	    reason?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StatisticValueResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class StatisticCountResponse {
+	    value?: number;
+	    status: string;
+	    reason?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new StatisticCountResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class ColumnStatisticsResponse {
+	    name: string;
+	    nullCount: StatisticCountResponse;
+	    distinctCount: StatisticCountResponse;
+	    duplicateCount: StatisticCountResponse;
+	    min: StatisticValueResponse;
+	    max: StatisticValueResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new ColumnStatisticsResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.nullCount = this.convertValues(source["nullCount"], StatisticCountResponse);
+	        this.distinctCount = this.convertValues(source["distinctCount"], StatisticCountResponse);
+	        this.duplicateCount = this.convertValues(source["duplicateCount"], StatisticCountResponse);
+	        this.min = this.convertValues(source["min"], StatisticValueResponse);
+	        this.max = this.convertValues(source["max"], StatisticValueResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProfileResponse {
 	    id: string;
 	    name: string;
@@ -287,6 +359,50 @@ export namespace wails {
 		    return a;
 		}
 	}
+	export class ForeignKeyStatisticsResponse {
+	    name: string;
+	    fromColumns: string[];
+	    toTable: string;
+	    toColumns: string[];
+	    sourceRowCount: StatisticCountResponse;
+	    nullCount: StatisticCountResponse;
+	    referencedRowCount: StatisticCountResponse;
+	    missingReferenceCount: StatisticCountResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new ForeignKeyStatisticsResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.fromColumns = source["fromColumns"];
+	        this.toTable = source["toTable"];
+	        this.toColumns = source["toColumns"];
+	        this.sourceRowCount = this.convertValues(source["sourceRowCount"], StatisticCountResponse);
+	        this.nullCount = this.convertValues(source["nullCount"], StatisticCountResponse);
+	        this.referencedRowCount = this.convertValues(source["referencedRowCount"], StatisticCountResponse);
+	        this.missingReferenceCount = this.convertValues(source["missingReferenceCount"], StatisticCountResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProfileCheckResponse {
 	    valid: boolean;
 	    profileCount: number;
@@ -489,6 +605,80 @@ export namespace wails {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.data = this.convertValues(source["data"], StatusResponse);
+	        this.error = this.convertValues(source["error"], ErrorResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TableStatisticsResponse {
+	    table: string;
+	    rowCount: StatisticCountResponse;
+	    columnCount: number;
+	    collectedAt?: string;
+	    status: string;
+	    columns: ColumnStatisticsResponse[];
+	    foreignKeys: ForeignKeyStatisticsResponse[];
+
+	    static createFrom(source: any = {}) {
+	        return new TableStatisticsResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.table = source["table"];
+	        this.rowCount = this.convertValues(source["rowCount"], StatisticCountResponse);
+	        this.columnCount = source["columnCount"];
+	        this.collectedAt = source["collectedAt"];
+	        this.status = source["status"];
+	        this.columns = this.convertValues(source["columns"], ColumnStatisticsResponse);
+	        this.foreignKeys = this.convertValues(source["foreignKeys"], ForeignKeyStatisticsResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStatisticsResponse_ {
+	    data?: TableStatisticsResponse;
+	    error?: ErrorResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStatisticsResponse_(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], TableStatisticsResponse);
 	        this.error = this.convertValues(source["error"], ErrorResponse);
 	    }
 
@@ -730,6 +920,9 @@ export namespace wails {
 		    return a;
 		}
 	}
+
+
+
 
 
 

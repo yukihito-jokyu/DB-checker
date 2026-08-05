@@ -21,6 +21,8 @@ type inspectionRepositoryStub struct {
 	inspectErr      error
 	structure       domain.TableStructure
 	structureErr    error
+	statistics      domain.TableStatistics
+	statisticsErr   error
 }
 
 // プロファイル読込再現
@@ -67,6 +69,11 @@ func (s *inspectionRepositoryStub) InspectSchema(context.Context, domain.Profile
 // テーブル構造取得再現
 func (s *inspectionRepositoryStub) InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error) {
 	return s.structure, s.structureErr
+}
+
+// テーブル統計取得再現
+func (s *inspectionRepositoryStub) InspectTableStatistics(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error) {
+	return s.statistics, s.statisticsErr
 }
 
 // データベーススキーマ取得検証
@@ -372,6 +379,152 @@ func TestAppUseCaseGetTableStructure(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("GetTableStructure() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// テーブル統計取得検証
+func TestAppUseCaseGetTableStatistics(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	rowCount := int64(2)
+	partial := domain.TableStatistics{Table: domain.TableRef{Namespace: "public", Name: "items"}, RowCount: domain.StatisticCount{Value: &rowCount, Status: domain.StatisticsStatusComplete}}
+	repositoryErr := errors.New("statistics failed")
+	tests := []struct {
+		name       string
+		emptyTable bool
+		ctx        context.Context
+		repository inspectionRepositoryStub
+		wantCode   apperr.Code
+		wantStatus domain.StatisticsStatus
+		wantCause  error
+	}{
+		{
+			name: "完全統計を返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				statistics:      domain.TableStatistics{Status: domain.StatisticsStatusComplete},
+			},
+			wantStatus: domain.StatisticsStatusComplete,
+		},
+		{
+			name: "期限超過は部分結果を返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				statistics:      partial,
+				statisticsErr:   context.DeadlineExceeded,
+			},
+			wantStatus: domain.StatisticsStatusTimeout,
+		},
+		{
+			name: "キャンセルは制御フローのエラーを返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				statisticsErr:   context.Canceled,
+			},
+			wantCode: apperr.CodeOperationCanceled,
+		},
+		{
+			name: "プロファイル読込失敗を返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				loadErr: repositoryErr,
+			},
+			wantCause: repositoryErr,
+		},
+		{
+			name: "アクティブプロファイル未選択を返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "削除済みアクティブプロファイルを返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:       "空テーブル名を検証する",
+			emptyTable: true,
+			ctx:        context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "資格情報取得失敗を分類する",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      stringPointer(profile.ID),
+				credentialErr: repositoryErr,
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "資格情報未登録を返す",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "統計取得失敗を分類する",
+			ctx:  context.Background(),
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				statisticsErr:   repositoryErr,
+			},
+			wantCode: apperr.CodeStatsLoadFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			table := "items"
+			if tt.emptyTable {
+				table = ""
+			}
+			got, err := NewAppUseCase(&tt.repository).GetTableStatistics(tt.ctx, table)
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Errorf("GetTableStatistics() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Errorf("GetTableStatistics() error = %v, want cause %v", err, tt.wantCause)
+			}
+			if tt.wantCode != "" || tt.wantCause != nil {
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetTableStatistics() error = %v", err)
+			}
+			if got.Status != tt.wantStatus {
+				t.Errorf("Status = %q, want %q", got.Status, tt.wantStatus)
 			}
 		})
 	}
