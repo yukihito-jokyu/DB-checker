@@ -394,7 +394,12 @@ func inspectColumnStatistics(ctx context.Context, database *sql.DB, dbType domai
 		duplicateCount = nonNullCount - distinctCount
 	}
 
-	statistics := domain.ColumnStatistics{Name: column.Name, NullCount: availableCount(nullCount), DistinctCount: availableCount(distinctCount), DuplicateCount: availableCount(duplicateCount)}
+	statistics := domain.ColumnStatistics{
+		Name:           column.Name,
+		NullCount:      availableCount(nullCount),
+		DistinctCount:  availableCount(distinctCount),
+		DuplicateCount: availableCount(duplicateCount),
+	}
 	statistics.Min = availableValue(minValue)
 	statistics.Max = availableValue(maxValue)
 
@@ -418,7 +423,16 @@ func inspectForeignKeyStatistics(ctx context.Context, database *sql.DB, dbType d
 		return domain.ForeignKeyStatistics{}, err
 	}
 
-	return domain.ForeignKeyStatistics{Name: foreignKey.Name, FromColumns: foreignKey.FromColumns, ToTable: foreignKey.ToTable, ToColumns: foreignKey.ToColumns, SourceRowCount: availableCount(sourceCount), NullCount: availableCount(nullCount), ReferencedRowCount: availableCount(referencedCount), MissingReferenceCount: availableCount(sourceCount - nullCount - referencedCount)}, nil
+	return domain.ForeignKeyStatistics{
+		Name:                  foreignKey.Name,
+		FromColumns:           foreignKey.FromColumns,
+		ToTable:               foreignKey.ToTable,
+		ToColumns:             foreignKey.ToColumns,
+		SourceRowCount:        availableCount(sourceCount),
+		NullCount:             availableCount(nullCount),
+		ReferencedRowCount:    availableCount(referencedCount),
+		MissingReferenceCount: availableCount(sourceCount - nullCount - referencedCount),
+	}, nil
 }
 
 // 件数問い合わせ実行
@@ -433,28 +447,42 @@ func queryCount(ctx context.Context, database *sql.DB, query string) (int64, err
 
 // 利用可能件数生成
 func availableCount(value int64) domain.StatisticCount {
-	return domain.StatisticCount{Value: &value, Status: domain.StatisticsStatusComplete}
+	return domain.StatisticCount{
+		Value:  &value,
+		Status: domain.StatisticsStatusComplete,
+	}
 }
 
 // 未取得件数生成
 func unavailableCount() domain.StatisticCount {
 	reason := "not collected"
 
-	return domain.StatisticCount{Status: domain.StatisticsStatusUnavailable, Reason: &reason}
+	return domain.StatisticCount{
+		Status: domain.StatisticsStatusUnavailable,
+		Reason: &reason,
+	}
 }
 
 // 利用可能値生成
 func availableValue(value sql.NullString) domain.StatisticValue {
 	if !value.Valid {
-		return domain.StatisticValue{Status: domain.StatisticsStatusComplete}
+		return domain.StatisticValue{
+			Status: domain.StatisticsStatusComplete,
+		}
 	}
 
-	return domain.StatisticValue{Value: &value.String, Status: domain.StatisticsStatusComplete}
+	return domain.StatisticValue{
+		Value:  &value.String,
+		Status: domain.StatisticsStatusComplete,
+	}
 }
 
 // 未取得値生成
 func unavailableValue(reason string) domain.StatisticValue {
-	return domain.StatisticValue{Status: domain.StatisticsStatusUnavailable, Reason: &reason}
+	return domain.StatisticValue{
+		Status: domain.StatisticsStatusUnavailable,
+		Reason: &reason,
+	}
 }
 
 // 最小最大値対応判定
@@ -508,7 +536,15 @@ func inspectTableStructure(ctx context.Context, database *sql.DB, dbType domain.
 		return domain.TableStructure{}, err
 	}
 
-	return domain.TableStructure{Table: domain.Table{Namespace: ref.Namespace, Name: ref.Name, Columns: columns}, ForeignKeys: foreignKeys, Indexes: indexes}, nil
+	return domain.TableStructure{
+		Table: domain.Table{
+			Namespace: ref.Namespace,
+			Name:      ref.Name,
+			Columns:   columns,
+		},
+		ForeignKeys: foreignKeys,
+		Indexes:     indexes,
+	}, nil
 }
 
 // 詳細カラムメタデータ取得
@@ -566,7 +602,11 @@ func inspectIndexes(ctx context.Context, database *sql.DB, query, namespace, tab
 		}
 		index := grouped[row.name]
 		if index == nil {
-			index = &domain.Index{Name: row.name, Unique: row.unique, Kind: row.kind}
+			index = &domain.Index{
+				Name:   row.name,
+				Unique: row.unique,
+				Kind:   row.kind,
+			}
 			grouped[row.name] = index
 		}
 		index.Columns = append(index.Columns, row.column)
@@ -606,7 +646,11 @@ func inspectSchema(ctx context.Context, database *sql.DB, dbType domain.DBType, 
 			return domain.Schema{}, err
 		}
 
-		schema.Tables = append(schema.Tables, domain.Table{Namespace: namespace, Name: name, Columns: columns})
+		schema.Tables = append(schema.Tables, domain.Table{
+			Namespace: namespace,
+			Name:      name,
+			Columns:   columns,
+		})
 	}
 	if err := tableRows.Err(); err != nil {
 		return domain.Schema{}, err
@@ -674,7 +718,11 @@ func collectForeignKeys(rows *sql.Rows) ([]domain.ForeignKey, error) {
 		key := row.name + "\x00" + row.fromTable
 		foreignKey := grouped[key]
 		if foreignKey == nil {
-			foreignKey = &domain.ForeignKey{Name: row.name, FromTable: row.fromTable, ToTable: row.toTable}
+			foreignKey = &domain.ForeignKey{
+				Name:      row.name,
+				FromTable: row.fromTable,
+				ToTable:   row.toTable,
+			}
 			grouped[key] = foreignKey
 		}
 
@@ -765,7 +813,14 @@ func listRows(ctx context.Context, database *sql.DB, dbType domain.DBType, query
 	}
 	defer rows.Close()
 
-	result := domain.TableRows{Rows: []domain.TableRow{}, TotalCount: totalCount, Page: query.Page, PageSize: domain.TablePageSize, Sort: query.Sort, Filter: query.Filter}
+	result := domain.TableRows{
+		Rows:       []domain.TableRow{},
+		TotalCount: totalCount,
+		Page:       query.Page,
+		PageSize:   domain.TablePageSize,
+		Sort:       query.Sort,
+		Filter:     query.Filter,
+	}
 	for rows.Next() {
 		values := make([]any, len(query.Columns))
 		destinations := make([]any, len(values))
@@ -892,4 +947,110 @@ func tableCellValue(value any, column domain.Column) domain.CellValue {
 	}
 
 	return domain.CellValue{Kind: domain.CellKindValue, Value: text}
+}
+
+// テーブル行追加
+func (r *AppRepository) InsertRow(ctx context.Context, profile domain.Profile, password string, ref domain.TableRef, row domain.InsertRow) (domain.AffectedRows, error) {
+	driverName, dsn := connectionDSN(profile, password)
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+	defer database.Close()
+
+	if err := database.PingContext(ctx); err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	return insertRow(ctx, database, profile.DBType, ref, row)
+}
+
+// テーブル行追加実行
+func insertRow(ctx context.Context, database *sql.DB, dbType domain.DBType, ref domain.TableRef, row domain.InsertRow) (domain.AffectedRows, error) {
+	structure, err := inspectTableStructure(ctx, database, dbType, ref)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	colMap := make(map[string]domain.Column, len(structure.Table.Columns))
+	for _, col := range structure.Table.Columns {
+		colMap[col.Name] = col
+	}
+
+	quotedTable := qualifiedIdentifier(dbType, ref.Namespace, ref.Name)
+	columns := make([]string, 0, len(row.Values))
+	placeholders := make([]string, 0, len(row.Values))
+	args := make([]any, 0, len(row.Values))
+	paramIndex := 1
+
+	for _, val := range row.Values {
+		if val.Kind == domain.CellKindDefault {
+			continue
+		}
+
+		col, found := colMap[val.Column]
+		if !found {
+			return domain.AffectedRows{}, fmt.Errorf("%w: unknown column %s", domain.ErrInvalidRowInput, val.Column)
+		}
+
+		columns = append(columns, quoteIdentifier(dbType, val.Column))
+		placeholders = append(placeholders, tableRowsPlaceholder(dbType, paramIndex))
+		paramIndex++
+
+		if val.Kind == domain.CellKindNull {
+			args = append(args, nil)
+
+			continue
+		}
+
+		if val.Value == nil {
+			return domain.AffectedRows{}, fmt.Errorf("%w: missing value for column %s", domain.ErrInvalidRowInput, val.Column)
+		}
+
+		converted, err := convertInputValue(*val.Value, col.DataType)
+		if err != nil {
+			return domain.AffectedRows{}, err
+		}
+		args = append(args, converted)
+	}
+
+	var query string
+	if len(columns) > 0 {
+		query = fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", quotedTable, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
+	} else if dbType == domain.DBTypeMySQL {
+		query = fmt.Sprintf("INSERT INTO %s () VALUES ()", quotedTable)
+	} else {
+		query = fmt.Sprintf("INSERT INTO %s DEFAULT VALUES", quotedTable)
+	}
+
+	result, err := database.ExecContext(ctx, query, args...)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	affectedRows, err := result.RowsAffected()
+	if err != nil {
+		// 単体テスト到達不可: database/sql の Exec 成功後に RowsAffected はエラーを返さないため。
+		return domain.AffectedRows{}, err
+	}
+
+	return domain.AffectedRows{AffectedRows: affectedRows}, nil
+}
+
+// 入力値変換
+func convertInputValue(value string, dataType string) (any, error) {
+	lowerType := strings.ToLower(dataType)
+	if strings.Contains(lowerType, "blob") || strings.Contains(lowerType, "binary") || strings.Contains(lowerType, "bytea") {
+		bytes, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid base64 value for binary column", domain.ErrInvalidRowInput)
+		}
+
+		return bytes, nil
+	}
+	if strings.Contains(lowerType, "json") && !json.Valid([]byte(value)) {
+		return nil, fmt.Errorf("%w: invalid json value", domain.ErrInvalidRowInput)
+	}
+
+	return value, nil
 }
