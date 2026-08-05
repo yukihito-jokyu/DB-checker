@@ -20,6 +20,8 @@ export function GetTableStructure(arg1:string):Promise<wails.Response_github_com
 
 export function ListConnectionProfiles():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
 
+export function ListTableRows(arg1:wails.ListTableRowsRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableRowsResponse_>;
+
 export function LoadFlowState():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_FlowStateResponse_>;
 
 export function SaveConnectionProfile(arg1:wails.SaveConnectionProfileRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
