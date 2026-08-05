@@ -322,6 +322,227 @@ func TestInspectSchema(t *testing.T) {
 	}
 }
 
+// テーブル構造メタデータ取得検証
+func TestInspectTableStructure(t *testing.T) {
+	defaultValue := "nextval('items_id_seq')"
+	tests := []struct {
+		name      string
+		responses []inspectionTestResponse
+		want      domain.TableStructure
+		wantError string
+	}{
+		{
+			name: "PostgreSQLの詳細属性と索引を返す",
+			responses: []inspectionTestResponse{
+				{
+					query:   postgresTableStructureColumnQuery,
+					columns: []string{"name", "type", "nullable", "default", "generated", "primary", "foreign", "unique"},
+					values:  [][]driver.Value{{"id", "int4", false, defaultValue, true, true, false, true}},
+					errorAt: -1,
+				},
+				{
+					query:   postgresTableStructureForeignKeyQuery,
+					columns: []string{"name", "from_table", "from_column", "to_table", "to_column"},
+					errorAt: -1,
+				},
+				{
+					query:   postgresTableStructureIndexQuery,
+					columns: []string{"name", "column", "unique", "kind"},
+					values: [][]driver.Value{
+						{"items_pkey", "id", true, "btree"},
+						{"items_name_key", "name", true, "btree"},
+					},
+					errorAt: -1,
+				},
+			},
+			want: domain.TableStructure{
+				Table:       domain.Table{Namespace: "public", Name: "items", Columns: []domain.Column{{Name: "id", DataType: "int4", DefaultValue: &defaultValue, IsGenerated: true, IsPrimaryKey: true, IsUnique: true}}},
+				ForeignKeys: []domain.ForeignKey{},
+				Indexes: []domain.Index{
+					{Name: "items_name_key", Columns: []string{"name"}, Unique: true, Kind: "btree"},
+					{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"},
+				},
+			},
+		},
+		{
+			name: "存在しないテーブルを返す",
+			responses: []inspectionTestResponse{{
+				query:   postgresTableStructureColumnQuery,
+				columns: []string{"name"},
+				errorAt: -1,
+			}},
+			wantError: "no rows",
+		},
+		{
+			name: "カラム問い合わせ失敗を返す",
+			responses: []inspectionTestResponse{{
+				query: postgresTableStructureColumnQuery,
+				err:   errors.New("column query failed"),
+			}},
+			wantError: "column query failed",
+		},
+		{
+			name: "外部キー問い合わせ失敗を返す",
+			responses: []inspectionTestResponse{
+				{
+					query:   postgresTableStructureColumnQuery,
+					columns: []string{"name", "type", "nullable", "default", "generated", "primary", "foreign", "unique"},
+					values:  [][]driver.Value{{"id", "int4", false, nil, false, true, false, true}},
+					errorAt: -1,
+				},
+				{
+					query: postgresTableStructureForeignKeyQuery,
+					err:   errors.New("foreign key query failed"),
+				},
+			},
+			wantError: "foreign key query failed",
+		},
+		{
+			name: "インデックス問い合わせ失敗を返す",
+			responses: []inspectionTestResponse{
+				{
+					query:   postgresTableStructureColumnQuery,
+					columns: []string{"name", "type", "nullable", "default", "generated", "primary", "foreign", "unique"},
+					values:  [][]driver.Value{{"id", "int4", false, nil, false, true, false, true}},
+					errorAt: -1,
+				},
+				{
+					query:   postgresTableStructureForeignKeyQuery,
+					columns: []string{"name", "from_table", "from_column", "to_table", "to_column"},
+					errorAt: -1,
+				},
+				{
+					query: postgresTableStructureIndexQuery,
+					err:   errors.New("index query failed"),
+				},
+			},
+			wantError: "index query failed",
+		},
+	}
+
+	ref, err := domain.NewTableRef("public", "items")
+	if err != nil {
+		t.Fatalf("NewTableRef() error = %v", err)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, scenario := newInspectionTestDatabase(t, tt.responses)
+
+			got, err := inspectTableStructure(context.Background(), database, domain.DBTypePostgres, ref)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Errorf("inspectTableStructure() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("inspectTableStructure() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("inspectTableStructure() = %#v, want %#v", got, tt.want)
+			}
+			assertInspectionQueriesConsumed(t, scenario)
+		})
+	}
+}
+
+// 詳細カラムメタデータ取得検証
+func TestInspectDetailedColumns(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  inspectionTestResponse
+		wantError string
+	}{
+		{
+			name: "カラム行読込失敗を返す",
+			response: inspectionTestResponse{
+				query:   "detailed-columns",
+				columns: []string{"name", "type", "nullable", "default", "generated", "primary", "foreign", "unique"},
+				values:  [][]driver.Value{{nil, "int4", false, nil, false, false, false, false}},
+				errorAt: -1,
+			},
+			wantError: "converting NULL to string is unsupported",
+		},
+		{
+			name: "カラム行反復失敗を返す",
+			response: inspectionTestResponse{
+				query:   "detailed-columns",
+				columns: []string{"name"},
+				rowErr:  errors.New("detailed column rows failed"),
+				errorAt: 0,
+			},
+			wantError: "detailed column rows failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{tt.response})
+
+			_, err := inspectDetailedColumns(context.Background(), database, tt.response.query, "public", "items")
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Errorf("inspectDetailedColumns() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+// テーブル外部キーメタデータ取得検証
+func TestInspectTableForeignKeys(t *testing.T) {
+	database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{{
+		query: "table-foreign-keys",
+		err:   errors.New("foreign key query failed"),
+	}})
+
+	_, err := inspectTableForeignKeys(context.Background(), database, "table-foreign-keys", "public", "items")
+	if err == nil || !strings.Contains(err.Error(), "foreign key query failed") {
+		t.Errorf("inspectTableForeignKeys() error = %v, want %q", err, "foreign key query failed")
+	}
+}
+
+// インデックスメタデータ取得検証
+func TestInspectIndexes(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  inspectionTestResponse
+		wantError string
+	}{
+		{
+			name: "インデックス行読込失敗を返す",
+			response: inspectionTestResponse{
+				query:   "indexes",
+				columns: []string{"name", "column", "unique", "kind"},
+				values:  [][]driver.Value{{nil, "id", true, "btree"}},
+				errorAt: -1,
+			},
+			wantError: "converting NULL to string is unsupported",
+		},
+		{
+			name: "インデックス行反復失敗を返す",
+			response: inspectionTestResponse{
+				query:   "indexes",
+				columns: []string{"name"},
+				rowErr:  errors.New("index rows failed"),
+				errorAt: 0,
+			},
+			wantError: "index rows failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{tt.response})
+
+			_, err := inspectIndexes(context.Background(), database, tt.response.query, "public", "items")
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Errorf("inspectIndexes() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 // カラムメタデータ取得検証
 func TestInspectColumns(t *testing.T) {
 	tests := []struct {
@@ -545,6 +766,109 @@ func TestAppRepositoryInspectSchemaMySQL(t *testing.T) {
 	assertInspectionQueriesConsumed(t, scenario)
 }
 
+// テーブル構造メタデータ接続検証
+func TestAppRepositoryInspectTableStructure(t *testing.T) {
+	profile := connectionTestProfile(t, domain.DBTypePostgres)
+	ref, err := domain.NewTableRef("public", "items")
+	if err != nil {
+		t.Fatalf("NewTableRef() error = %v", err)
+	}
+	originalOpenDatabase := openDatabase
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+
+	tests := []struct {
+		name      string
+		open      func(string, string) (*sql.DB, error)
+		ctx       context.Context
+		wantError string
+	}{
+		{
+			name: "データベース接続生成失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			ctx:       context.Background(),
+			wantError: "open failed",
+		},
+		{
+			name: "接続確認失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, nil)
+
+				return database, nil
+			},
+			ctx:       canceledInspectionContext(),
+			wantError: context.Canceled.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openDatabase = tt.open
+
+			_, err := NewAppRepository(nil).InspectTableStructure(tt.ctx, profile, "secret", ref)
+			if err == nil || err.Error() != tt.wantError {
+				t.Errorf("InspectTableStructure() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+// MySQLテーブル構造メタデータ接続検証
+func TestAppRepositoryInspectTableStructureMySQL(t *testing.T) {
+	database, scenario := newInspectionTestDatabase(t, []inspectionTestResponse{
+		{
+			query:   mysqlTableStructureColumnQuery,
+			columns: []string{"name", "type", "nullable", "default", "generated", "primary", "foreign", "unique"},
+			values:  [][]driver.Value{{"id", "int", false, nil, false, true, false, true}},
+			errorAt: -1,
+		},
+		{
+			query:   mysqlTableStructureForeignKeyQuery,
+			columns: []string{"name", "from_table", "from_column", "to_table", "to_column"},
+			errorAt: -1,
+		},
+		{
+			query:   mysqlTableStructureIndexQuery,
+			columns: []string{"name", "column", "unique", "kind"},
+			errorAt: -1,
+		},
+	})
+	originalOpenDatabase := openDatabase
+	openDatabase = func(string, string) (*sql.DB, error) { return database, nil }
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+
+	profile := connectionTestProfile(t, domain.DBTypeMySQL)
+	ref, err := domain.NewTableRef(profile.Database, "items")
+	if err != nil {
+		t.Fatalf("NewTableRef() error = %v", err)
+	}
+	got, err := NewAppRepository(nil).InspectTableStructure(context.Background(), profile, "secret", ref)
+	if err != nil {
+		t.Fatalf("InspectTableStructure() error = %v", err)
+	}
+	want := domain.TableStructure{
+		Table: domain.Table{
+			Namespace: profile.Database,
+			Name:      "items",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int",
+					IsPrimaryKey: true,
+					IsUnique:     true,
+				},
+			},
+		},
+		ForeignKeys: []domain.ForeignKey{},
+		Indexes:     []domain.Index{},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("InspectTableStructure() = %#v, want %#v", got, want)
+	}
+	assertInspectionQueriesConsumed(t, scenario)
+}
+
 // キャンセル済みコンテキスト生成
 func canceledInspectionContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -575,6 +899,41 @@ func TestSchemaQueries(t *testing.T) {
 			}
 			if foreignKeyQuery == "" {
 				t.Error("schemaQueries() foreign key query = empty, want non-empty")
+			}
+		})
+	}
+}
+
+// テーブル構造問い合わせ取得検証
+func TestTableStructureQueries(t *testing.T) {
+	tests := []struct {
+		name       string
+		dbType     domain.DBType
+		wantColumn string
+	}{
+		{
+			name:       "MySQLの問い合わせを返す",
+			dbType:     domain.DBTypeMySQL,
+			wantColumn: mysqlTableStructureColumnQuery,
+		},
+		{
+			name:       "PostgreSQLの問い合わせを返す",
+			dbType:     domain.DBTypePostgres,
+			wantColumn: postgresTableStructureColumnQuery,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			columnQuery, foreignKeyQuery, indexQuery := tableStructureQueries(tt.dbType)
+			if columnQuery != tt.wantColumn {
+				t.Errorf("tableStructureQueries() column query = %q, want %q", columnQuery, tt.wantColumn)
+			}
+			if foreignKeyQuery == "" {
+				t.Error("tableStructureQueries() foreign key query = empty, want non-empty")
+			}
+			if indexQuery == "" {
+				t.Error("tableStructureQueries() index query = empty, want non-empty")
 			}
 		})
 	}
