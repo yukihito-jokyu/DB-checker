@@ -1147,3 +1147,244 @@ func TestInsertRowValidate(t *testing.T) {
 		})
 	}
 }
+
+// セル更新入力検証
+func TestCellUpdateValidate(t *testing.T) {
+	value := "1"
+	name := "updated"
+	columns := []Column{
+		{Name: "id", DataType: "int4", IsPrimaryKey: true},
+		{Name: "name", DataType: "text"},
+		{Name: "note", DataType: "text", Nullable: true},
+	}
+	tests := []struct {
+		name    string
+		change  CellUpdate
+		columns []Column
+		wantErr bool
+	}{
+		{
+			name: "主キーの編集前値でセルを更新できる",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "users"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "id", Kind: CellKindValue, Value: &value}}},
+				Column:  "name",
+				Value:   CellValue{Kind: CellKindValue, Value: name},
+			},
+		},
+		{
+			name: "既定値へセルを更新できる",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "users"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "id", Kind: CellKindValue, Value: &value}}},
+				Column:  "name",
+				Value:   CellValue{Kind: CellKindDefault},
+			},
+		},
+		{
+			name: "主キー以外の位置指定を拒否する",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "users"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "name", Kind: CellKindValue, Value: &name}}},
+				Column:  "note",
+				Value:   CellValue{Kind: CellKindNull},
+			},
+			wantErr: true,
+		},
+		{
+			name: "複合主キー位置指定の不足を拒否する",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "users"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "id", Kind: CellKindValue, Value: &value}}},
+				Column:  "name",
+				Value:   CellValue{Kind: CellKindValue, Value: name},
+			},
+			columns: []Column{
+				{Name: "id", DataType: "int4", IsPrimaryKey: true},
+				{Name: "tenant_id", DataType: "int4", IsPrimaryKey: true},
+				{Name: "name", DataType: "text"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "非NULL列へのNULL更新を拒否する",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "users"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "id", Kind: CellKindValue, Value: &value}}},
+				Column:  "name",
+				Value:   CellValue{Kind: CellKindNull},
+			},
+			wantErr: true,
+		},
+		{
+			name:    "空の入力を拒否する",
+			change:  CellUpdate{},
+			wantErr: true,
+		},
+		{
+			name: "空名の構造列を拒否する",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "users"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "id", Kind: CellKindValue, Value: &value}}},
+				Column:  "name",
+				Value:   CellValue{Kind: CellKindValue, Value: name},
+			},
+			columns: []Column{{}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testColumns := columns
+			if tt.columns != nil {
+				testColumns = tt.columns
+			}
+			err := tt.change.Validate(testColumns)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// 行位置NULL値検証
+func TestValidLocatorValue(t *testing.T) {
+	value := "1"
+	tests := []struct {
+		name   string
+		value  ColumnValueInput
+		column Column
+		wantOK bool
+	}{
+		{
+			name:   "NULL許可列のNULLを許可する",
+			value:  ColumnValueInput{Kind: CellKindNull},
+			column: Column{Nullable: true},
+			wantOK: true,
+		},
+		{
+			name:   "NULL値付きNULL位置指定を拒否する",
+			value:  ColumnValueInput{Kind: CellKindNull, Value: &value},
+			column: Column{Nullable: true},
+			wantOK: false,
+		},
+		{
+			name:   "NULL非許可列のNULLを拒否する",
+			value:  ColumnValueInput{Kind: CellKindNull},
+			column: Column{},
+			wantOK: false,
+		},
+		{
+			name:   "値なしの値位置指定を拒否する",
+			value:  ColumnValueInput{Kind: CellKindValue},
+			column: Column{},
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validLocatorValue(tt.value, tt.column); got != tt.wantOK {
+				t.Errorf("validLocatorValue() = %v, want %v", got, tt.wantOK)
+			}
+		})
+	}
+}
+
+// 主キーなしセル更新入力検証
+func TestCellUpdateValidateWithoutPrimaryKey(t *testing.T) {
+	name := "before"
+	note := "memo"
+	columns := []Column{
+		{Name: "name", DataType: "text"},
+		{Name: "note", DataType: "text", Nullable: true},
+	}
+	tests := []struct {
+		name    string
+		change  CellUpdate
+		wantErr bool
+	}{
+		{
+			name: "全カラムの編集前値で更新できる",
+			change: CellUpdate{
+				Table: TableRef{Namespace: "public", Name: "logs"},
+				Locator: RowLocator{Values: []ColumnValueInput{
+					{Column: "name", Kind: CellKindValue, Value: &name},
+					{Column: "note", Kind: CellKindValue, Value: &note},
+				}},
+				Column: "name",
+				Value:  CellValue{Kind: CellKindValue, Value: "after"},
+			},
+		},
+		{
+			name: "カラム位置指定の欠落を拒否する",
+			change: CellUpdate{
+				Table:   TableRef{Namespace: "public", Name: "logs"},
+				Locator: RowLocator{Values: []ColumnValueInput{{Column: "name", Kind: CellKindValue, Value: &name}}},
+				Column:  "name",
+				Value:   CellValue{Kind: CellKindValue, Value: "after"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "重複する位置指定を拒否する",
+			change: CellUpdate{
+				Table: TableRef{Namespace: "public", Name: "logs"},
+				Locator: RowLocator{Values: []ColumnValueInput{
+					{Column: "name", Kind: CellKindValue, Value: &name},
+					{Column: "name", Kind: CellKindValue, Value: &name},
+				}},
+				Column: "name",
+				Value:  CellValue{Kind: CellKindValue, Value: "after"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "未知カラムの位置指定を拒否する",
+			change: CellUpdate{
+				Table: TableRef{Namespace: "public", Name: "logs"},
+				Locator: RowLocator{Values: []ColumnValueInput{
+					{Column: "name", Kind: CellKindValue, Value: &name},
+					{Column: "unknown", Kind: CellKindValue, Value: &note},
+				}},
+				Column: "name",
+				Value:  CellValue{Kind: CellKindValue, Value: "after"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.change.Validate(columns)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// 複合主キーセル更新入力検証
+func TestCellUpdateValidateCompositePrimaryKey(t *testing.T) {
+	partA := "1"
+	partB := "2"
+	columns := []Column{
+		{Name: "part_a", DataType: "int4", IsPrimaryKey: true},
+		{Name: "part_b", DataType: "int4", IsPrimaryKey: true},
+		{Name: "name", DataType: "text"},
+	}
+	change := CellUpdate{
+		Table: TableRef{Namespace: "public", Name: "pairs"},
+		Locator: RowLocator{Values: []ColumnValueInput{
+			{Column: "part_a", Kind: CellKindValue, Value: &partA},
+			{Column: "part_b", Kind: CellKindValue, Value: &partB},
+		}},
+		Column: "part_a",
+		Value:  CellValue{Kind: CellKindValue, Value: "3"},
+	}
+
+	if err := change.Validate(columns); err != nil {
+		t.Errorf("Validate() error = %v, want nil", err)
+	}
+}
