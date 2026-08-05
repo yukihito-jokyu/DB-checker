@@ -218,7 +218,11 @@ func TestAppRepositorySaveFlowState(t *testing.T) {
 	state := domain.FlowState{
 		Version: domain.FlowStateVersion,
 		TableStates: map[string]domain.TableFlowState{
-			"users": {X: 100.5, Y: -20, Expanded: true},
+			"users": {
+				X:        100.5,
+				Y:        -20,
+				Expanded: true,
+			},
 		},
 	}
 	tests := []struct {
@@ -315,7 +319,11 @@ func TestAppRepositorySaveConfigUpdatesConcurrently(t *testing.T) {
 	state := domain.FlowState{
 		Version: domain.FlowStateVersion,
 		TableStates: map[string]domain.TableFlowState{
-			"users": {X: 100, Y: 200, Expanded: true},
+			"users": {
+				X:        100,
+				Y:        200,
+				Expanded: true,
+			},
 		},
 	}
 	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")
@@ -389,7 +397,11 @@ func TestAppRepositoryLoadFlowState(t *testing.T) {
 	wantState := domain.FlowState{
 		Version: domain.FlowStateVersion,
 		TableStates: map[string]domain.TableFlowState{
-			"users": {X: 100.5, Y: -20, Expanded: true},
+			"users": {
+				X:        100.5,
+				Y:        -20,
+				Expanded: true,
+			},
 		},
 	}
 	tests := []struct {
@@ -485,7 +497,11 @@ func TestAppRepositoryLoadFlowStateByProfile(t *testing.T) {
 			want: domain.FlowState{
 				Version: domain.FlowStateVersion,
 				TableStates: map[string]domain.TableFlowState{
-					"users": {X: 100, Y: 200, Expanded: true},
+					"users": {
+						X:        100,
+						Y:        200,
+						Expanded: true,
+					},
 				},
 			},
 		},
@@ -495,7 +511,11 @@ func TestAppRepositoryLoadFlowStateByProfile(t *testing.T) {
 			want: domain.FlowState{
 				Version: domain.FlowStateVersion,
 				TableStates: map[string]domain.TableFlowState{
-					"orders": {X: 300, Y: 400, Expanded: false},
+					"orders": {
+						X:        300,
+						Y:        400,
+						Expanded: false,
+					},
 				},
 			},
 		},

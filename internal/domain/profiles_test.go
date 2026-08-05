@@ -523,7 +523,11 @@ func TestFlowStateValidate(t *testing.T) {
 			state: FlowState{
 				Version: FlowStateVersion,
 				TableStates: map[string]TableFlowState{
-					"users": {X: 120.5, Y: -20, Expanded: true},
+					"users": {
+						X:        120.5,
+						Y:        -20,
+						Expanded: true,
+					},
 				},
 			},
 			valid: true,
@@ -545,7 +549,11 @@ func TestFlowStateValidate(t *testing.T) {
 			state: FlowState{
 				Version: FlowStateVersion,
 				TableStates: map[string]TableFlowState{
-					" ": {X: 0, Y: 0},
+					" ": {
+						X:        0,
+						Y:        0,
+						Expanded: false,
+					},
 				},
 			},
 		},

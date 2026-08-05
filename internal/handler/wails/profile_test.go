@@ -111,9 +111,16 @@ func TestAppHandlerLoadFlowState(t *testing.T) {
 			repository: connectionProfileRepositoryStub{
 				profiles: []domain.Profile{profile},
 				activeID: stringPointer(profile.ID),
-				flowState: domain.FlowState{Version: domain.FlowStateVersion, TableStates: map[string]domain.TableFlowState{
-					"users": {X: 100.5, Y: -20, Expanded: true},
-				}},
+				flowState: domain.FlowState{
+					Version: domain.FlowStateVersion,
+					TableStates: map[string]domain.TableFlowState{
+						"users": {
+							X:        100.5,
+							Y:        -20,
+							Expanded: true,
+						},
+					},
+				},
 			},
 			wantData: true,
 		},
@@ -187,7 +194,11 @@ func TestAppHandlerSaveFlowState(t *testing.T) {
 	request := SaveFlowStateRequest{
 		Version: domain.FlowStateVersion,
 		TableStates: map[string]TableFlowStateRequest{
-			"users": {X: 100.5, Y: -20, Expanded: true},
+			"users": {
+				X:        100.5,
+				Y:        -20,
+				Expanded: true,
+			},
 		},
 	}
 	tests := []struct {

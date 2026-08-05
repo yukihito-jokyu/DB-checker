@@ -122,6 +122,11 @@ func (*appRepositoryStub) ListRows(context.Context, domain.Profile, string, doma
 	return domain.TableRows{}, nil
 }
 
+// テーブル行追加再現
+func (*appRepositoryStub) InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error) {
+	return domain.AffectedRows{}, nil
+}
+
 // 接続プロファイル読込
 func TestAppUseCaseLoadProfiles(t *testing.T) {
 	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")
@@ -212,7 +217,11 @@ func TestAppUseCaseLoadFlowState(t *testing.T) {
 	wantState := domain.FlowState{
 		Version: domain.FlowStateVersion,
 		TableStates: map[string]domain.TableFlowState{
-			"users": {X: 100, Y: 200, Expanded: true},
+			"users": {
+				X:        100,
+				Y:        200,
+				Expanded: true,
+			},
 		},
 	}
 	tests := []struct {
@@ -275,7 +284,11 @@ func TestAppUseCaseSaveFlowState(t *testing.T) {
 	state := domain.FlowState{
 		Version: domain.FlowStateVersion,
 		TableStates: map[string]domain.TableFlowState{
-			"users": {X: 100, Y: 200, Expanded: true},
+			"users": {
+				X:        100,
+				Y:        200,
+				Expanded: true,
+			},
 		},
 	}
 	tests := []struct {

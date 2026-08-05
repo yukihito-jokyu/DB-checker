@@ -72,20 +72,34 @@ func (h *AppHandler) SaveFlowState(request SaveFlowStateRequest) Response[FlowSt
 func toFlowStateResponse(state domain.FlowState) FlowStateResponse {
 	tableStates := make(map[string]TableFlowStateResponse, len(state.TableStates))
 	for tableName, tableState := range state.TableStates {
-		tableStates[tableName] = TableFlowStateResponse{X: tableState.X, Y: tableState.Y, Expanded: tableState.Expanded}
+		tableStates[tableName] = TableFlowStateResponse{
+			X:        tableState.X,
+			Y:        tableState.Y,
+			Expanded: tableState.Expanded,
+		}
 	}
 
-	return FlowStateResponse{Version: state.Version, TableStates: tableStates}
+	return FlowStateResponse{
+		Version:     state.Version,
+		TableStates: tableStates,
+	}
 }
 
 // 保存リクエストのフロー状態変換
 func toFlowState(request SaveFlowStateRequest) domain.FlowState {
 	tableStates := make(map[string]domain.TableFlowState, len(request.TableStates))
 	for tableName, tableState := range request.TableStates {
-		tableStates[tableName] = domain.TableFlowState{X: tableState.X, Y: tableState.Y, Expanded: tableState.Expanded}
+		tableStates[tableName] = domain.TableFlowState{
+			X:        tableState.X,
+			Y:        tableState.Y,
+			Expanded: tableState.Expanded,
+		}
 	}
 
-	return domain.FlowState{Version: request.Version, TableStates: tableStates}
+	return domain.FlowState{
+		Version:     request.Version,
+		TableStates: tableStates,
+	}
 }
 
 // 接続プロファイル保存
