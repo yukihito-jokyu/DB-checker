@@ -127,6 +127,11 @@ func (*appRepositoryStub) InsertRow(context.Context, domain.Profile, string, dom
 	return domain.AffectedRows{}, nil
 }
 
+// テーブルセル更新再現
+func (*appRepositoryStub) UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error) {
+	return domain.AffectedRows{}, nil
+}
+
 // 接続プロファイル読込
 func TestAppUseCaseLoadProfiles(t *testing.T) {
 	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")
