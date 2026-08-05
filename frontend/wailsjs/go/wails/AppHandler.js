@@ -57,3 +57,7 @@ export function SaveConnectionProfile(arg1) {
 export function SaveFlowState(arg1) {
   return window['go']['wails']['AppHandler']['SaveFlowState'](arg1);
 }
+
+export function UpdateTableCell(arg1) {
+  return window['go']['wails']['AppHandler']['UpdateTableCell'](arg1);
+}

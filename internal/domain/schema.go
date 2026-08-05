@@ -96,6 +96,19 @@ type InsertRow struct {
 	Values []ColumnValueInput
 }
 
+// 行位置指定
+type RowLocator struct {
+	Values []ColumnValueInput
+}
+
+// セル更新
+type CellUpdate struct {
+	Table   TableRef
+	Locator RowLocator
+	Column  string
+	Value   CellValue
+}
+
 type AffectedRows struct {
 	AffectedRows int64
 }
@@ -461,4 +474,76 @@ func (r InsertRow) Validate(columns []Column) error {
 	}
 
 	return nil
+}
+
+// セル更新入力検証
+func (c CellUpdate) Validate(columns []Column) error {
+	if _, err := NewTableRef(c.Table.Namespace, c.Table.Name); err != nil || c.Column == "" || len(columns) == 0 || len(c.Locator.Values) == 0 {
+		return ErrInvalidRowInput
+	}
+
+	columnMap := make(map[string]Column, len(columns))
+	primaryKeys := make(map[string]struct{})
+	for _, column := range columns {
+		if column.Name == "" {
+			return ErrInvalidRowInput
+		}
+		columnMap[column.Name] = column
+		if column.IsPrimaryKey {
+			primaryKeys[column.Name] = struct{}{}
+		}
+	}
+
+	target, found := columnMap[c.Column]
+	if !found || target.IsGenerated || !validUpdateValue(c.Value, target) {
+		return ErrInvalidRowInput
+	}
+
+	locator := make(map[string]struct{}, len(c.Locator.Values))
+	for _, value := range c.Locator.Values {
+		column, found := columnMap[value.Column]
+		if !found || !validLocatorValue(value, column) {
+			return ErrInvalidRowInput
+		}
+		if _, duplicate := locator[value.Column]; duplicate {
+			return ErrInvalidRowInput
+		}
+		locator[value.Column] = struct{}{}
+	}
+
+	if len(primaryKeys) > 0 {
+		if len(locator) != len(primaryKeys) {
+			return ErrInvalidRowInput
+		}
+		for name := range primaryKeys {
+			if _, found := locator[name]; !found {
+				return ErrInvalidRowInput
+			}
+		}
+	} else if len(locator) != len(columnMap) {
+		return ErrInvalidRowInput
+	}
+
+	return nil
+}
+
+// 更新値妥当性判定
+func validUpdateValue(value CellValue, column Column) bool {
+	if value.Kind == CellKindNull {
+		return column.Nullable
+	}
+	if value.Kind == CellKindDefault {
+		return true
+	}
+
+	return value.Kind == CellKindValue
+}
+
+// 行位置値妥当性判定
+func validLocatorValue(value ColumnValueInput, column Column) bool {
+	if value.Kind == CellKindNull {
+		return column.Nullable && value.Value == nil
+	}
+
+	return value.Kind == CellKindValue && value.Value != nil
 }

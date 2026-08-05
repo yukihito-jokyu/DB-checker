@@ -399,6 +399,78 @@ func TestAppUseCaseInsertTableRowIntegration(t *testing.T) {
 			if affected.AffectedRows != 1 {
 				t.Errorf("AffectedRows = %d, want 1", affected.AffectedRows)
 			}
+
+		})
+	}
+}
+
+// テーブルセル更新結合検証
+func TestAppUseCaseUpdateTableCellIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			database := integrationDatabase(t, target)
+			defer database.Close()
+			adminDatabase := integrationAdminDatabase(t, target)
+			if adminDatabase != nil {
+				defer adminDatabase.Close()
+			}
+			defer integrationSchemaCleanup(t, database, adminDatabase, target.Kind)
+			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
+			integrationStatisticsSeed(t, database, target.Kind)
+
+			appRepository, _, _ := integrationInspectionRepository(t, target)
+			id := "1"
+			change := domain.CellUpdate{
+				Table:   domain.TableRef{Name: "schema_child"},
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}},
+				Column:  "status",
+				Value:   domain.CellValue{Kind: domain.CellKindValue, Value: "updated"},
+			}
+
+			affected, err := NewAppUseCase(appRepository).UpdateTableCell(context.Background(), change)
+			if err != nil {
+				t.Fatalf("UpdateTableCell() error = %v", err)
+			}
+			if affected.AffectedRows != 1 {
+				t.Errorf("AffectedRows = %d, want 1", affected.AffectedRows)
+			}
+
+			var status string
+			if err := database.QueryRow("SELECT status FROM schema_child WHERE id = 1").Scan(&status); err != nil {
+				t.Fatalf("QueryRow updated status error = %v", err)
+			}
+			if status != "updated" {
+				t.Errorf("status = %q, want %q", status, "updated")
+			}
+
+			if _, err := database.Exec("INSERT INTO schema_isolated (id, optional_note) VALUES (1, 'custom-note')"); err != nil {
+				t.Fatalf("Exec default update seed error = %v", err)
+			}
+			defaultChange := domain.CellUpdate{
+				Table:   domain.TableRef{Name: "schema_isolated"},
+				Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}},
+				Column:  "optional_note",
+				Value:   domain.CellValue{Kind: domain.CellKindDefault},
+			}
+			affected, err = NewAppUseCase(appRepository).UpdateTableCell(context.Background(), defaultChange)
+			if err != nil {
+				t.Fatalf("UpdateTableCell() default error = %v", err)
+			}
+			if affected.AffectedRows != 1 {
+				t.Errorf("default AffectedRows = %d, want 1", affected.AffectedRows)
+			}
+
+			var optionalNote string
+			if err := database.QueryRow("SELECT optional_note FROM schema_isolated WHERE id = 1").Scan(&optionalNote); err != nil {
+				t.Fatalf("QueryRow default updated optional_note error = %v", err)
+			}
+			if optionalNote != "isolated-default" {
+				t.Errorf("optional_note = %q, want %q", optionalNote, "isolated-default")
+			}
 		})
 	}
 }

@@ -21,6 +21,7 @@ type AppRepository interface {
 	InspectTableStatistics(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error)
 	ListRows(context.Context, domain.Profile, string, domain.TableQuery) (domain.TableRows, error)
 	InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error)
+	UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error)
 }
 
 // アプリケーションユースケース

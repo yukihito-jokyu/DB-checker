@@ -28,6 +28,7 @@ type inspectionRepositoryStub struct {
 	rowsQuery       domain.TableQuery
 	affectedRows    domain.AffectedRows
 	insertRowErr    error
+	updateCellErr   error
 }
 
 // プロファイル読込再現
@@ -91,6 +92,11 @@ func (s *inspectionRepositoryStub) ListRows(_ context.Context, _ domain.Profile,
 // テーブル行追加再現
 func (s *inspectionRepositoryStub) InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error) {
 	return s.affectedRows, s.insertRowErr
+}
+
+// テーブルセル更新再現
+func (s *inspectionRepositoryStub) UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error) {
+	return s.affectedRows, s.updateCellErr
 }
 
 // データベーススキーマ取得検証
@@ -1096,4 +1102,159 @@ func TestAppUseCaseInsertTableRow(t *testing.T) {
 // テスト用文字列ポインター取得
 func testStringPtr(value string) *string {
 	return &value
+}
+
+// テーブルセル更新検証
+func TestAppUseCaseUpdateTableCell(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	unknownProfileID := "unknown"
+	id := "1"
+	name := "updated"
+	structure := func(columns []domain.Column) domain.TableStructure {
+		return domain.TableStructure{Table: domain.Table{
+			Namespace: profile.Schema,
+			Name:      "users",
+			Columns:   columns,
+		}}
+	}
+	change := func(column, value, locatorColumn, locatorValue string) domain.CellUpdate {
+		return domain.CellUpdate{
+			Table: domain.TableRef{Name: "users"},
+			Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{
+				Column: locatorColumn,
+				Kind:   domain.CellKindValue,
+				Value:  testStringPtr(locatorValue),
+			}}},
+			Column: column,
+			Value: domain.CellValue{
+				Kind:  domain.CellKindValue,
+				Value: value,
+			},
+		}
+	}
+	standardStructure := structure([]domain.Column{
+		{Name: "id", DataType: "int4", IsPrimaryKey: true},
+		{Name: "name", DataType: "text"},
+	})
+	tests := []struct {
+		name       string
+		repository *inspectionRepositoryStub
+		change     domain.CellUpdate
+		wantCode   apperr.Code
+		wantErr    bool
+	}{
+		{
+			name:       "正常にセルを更新できる",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: standardStructure, affectedRows: domain.AffectedRows{AffectedRows: 1}},
+			change:     change("name", name, "id", id),
+		},
+		{
+			name:       "更新失敗時はCELL_UPDATE_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: standardStructure, updateCellErr: errors.New("update failed")},
+			change:     change("name", name, "id", id),
+			wantCode:   apperr.CodeCellUpdateFailed,
+		},
+		{
+			name:       "プロファイル読込失敗を返す",
+			repository: &inspectionRepositoryStub{loadErr: errors.New("load failed")},
+			change:     change("name", name, "id", id),
+			wantErr:    true,
+		},
+		{
+			name:       "有効プロファイル未設定時はPROFILE_NOT_FOUNDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}},
+			change:     change("name", name, "id", id),
+			wantCode:   apperr.CodeProfileNotFound,
+		},
+		{
+			name:       "有効プロファイル不在時はPROFILE_NOT_FOUNDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &unknownProfileID},
+			change:     change("name", name, "id", id),
+			wantCode:   apperr.CodeProfileNotFound,
+		},
+		{
+			name:       "テーブル名不正時はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID},
+			change:     domain.CellUpdate{},
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "資格情報取得失敗時はCREDENTIAL_UNAVAILABLEを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credentialErr: errors.New("credential failed")},
+			change:     change("name", name, "id", id),
+			wantCode:   apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:       "資格情報不在時はCREDENTIAL_UNAVAILABLEを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID},
+			change:     change("name", name, "id", id),
+			wantCode:   apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:       "構造取得失敗時はCELL_UPDATE_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structureErr: errors.New("structure failed")},
+			change:     change("name", name, "id", id),
+			wantCode:   apperr.CodeCellUpdateFailed,
+		},
+		{
+			name:       "入力検証失敗時はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: standardStructure},
+			change:     change("unknown", name, "id", id),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "更新値の不正base64はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure([]domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "binary_data", DataType: "bytea"}}), updateCellErr: domain.ErrInvalidRowInput},
+			change:     change("binary_data", "not-base64", "id", id),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "更新値の不正JSONはVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure([]domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "metadata", DataType: "json"}}), updateCellErr: domain.ErrInvalidRowInput},
+			change:     change("metadata", "{invalid", "id", id),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "更新値の不正RFC3339はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure([]domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "occurred_at", DataType: "timestamp"}}), updateCellErr: domain.ErrInvalidRowInput},
+			change:     change("occurred_at", "not-rfc3339", "id", id),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "位置指定値の不正base64はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure([]domain.Column{{Name: "binary_data", DataType: "bytea", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}), updateCellErr: domain.ErrInvalidRowInput},
+			change:     change("name", name, "binary_data", "not-base64"),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "位置指定値の不正JSONはVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure([]domain.Column{{Name: "metadata", DataType: "json", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}), updateCellErr: domain.ErrInvalidRowInput},
+			change:     change("name", name, "metadata", "{invalid"),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:       "位置指定値の不正RFC3339はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{profiles: []domain.Profile{profile}, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure([]domain.Column{{Name: "occurred_at", DataType: "timestamp", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}), updateCellErr: domain.ErrInvalidRowInput},
+			change:     change("name", name, "occurred_at", "not-rfc3339"),
+			wantCode:   apperr.CodeValidationFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewAppUseCase(tt.repository).UpdateTableCell(context.Background(), tt.change)
+			if gotErr := err != nil; gotErr != tt.wantErr && tt.wantCode == "" {
+				t.Fatalf("UpdateTableCell() error = %v, want error %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Fatalf("UpdateTableCell() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if tt.wantCode == "" && got.AffectedRows != 1 {
+				t.Errorf("UpdateTableCell() = %#v, want affected rows 1", got)
+			}
+		})
+	}
 }

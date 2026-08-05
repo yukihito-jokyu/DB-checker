@@ -37,6 +37,7 @@ type schemaRepositoryStub struct {
 	flowStateErr    error
 	affectedRows    domain.AffectedRows
 	insertRowErr    error
+	updateCellErr   error
 }
 
 // プロファイル読込再現
@@ -98,6 +99,11 @@ func (s *schemaRepositoryStub) ListRows(context.Context, domain.Profile, string,
 // テーブル行追加再現
 func (s *schemaRepositoryStub) InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error) {
 	return s.affectedRows, s.insertRowErr
+}
+
+// テーブルセル更新再現
+func (s *schemaRepositoryStub) UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error) {
+	return s.affectedRows, s.updateCellErr
 }
 
 // データベーススキーマ取得レスポンス検証
@@ -803,5 +809,162 @@ func TestAppHandlerInsertTableRow(t *testing.T) {
 				t.Errorf("InsertTableRow() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+// テーブルセル更新ハンドラーレスポンス検証
+func TestAppHandlerUpdateTableCell(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	id := "1"
+	name := "updated"
+	structure := domain.TableStructure{Table: domain.Table{Namespace: profile.Schema, Name: "users", Columns: []domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}}}
+	request := UpdateTableCellRequest{Table: "users", Locator: []ColumnValueInputRequest{{Column: "id", Kind: "value", Value: &id}}, Column: "name", Value: TableCellResponse{Kind: "value", Value: name}}
+	invalidInputRepository := func(columns []domain.Column) *schemaRepositoryStub {
+		return &schemaRepositoryStub{
+			profile:         profile,
+			activeID:        &profile.ID,
+			credential:      "secret",
+			credentialFound: true,
+			structure: domain.TableStructure{Table: domain.Table{
+				Namespace: profile.Schema,
+				Name:      "users",
+				Columns:   columns,
+			}},
+			updateCellErr: domain.ErrInvalidRowInput,
+		}
+	}
+	invalidInputRequest := func(column, value, locatorColumn, locatorValue string) UpdateTableCellRequest {
+		return UpdateTableCellRequest{
+			Table: "users",
+			Locator: []ColumnValueInputRequest{{
+				Column: locatorColumn,
+				Kind:   "value",
+				Value:  &locatorValue,
+			}},
+			Column: column,
+			Value: TableCellResponse{
+				Kind:  "value",
+				Value: value,
+			},
+		}
+	}
+	tests := []struct {
+		name       string
+		repository *schemaRepositoryStub
+		request    UpdateTableCellRequest
+		want       Response[AffectedRowsResponse]
+		wantLog    string
+		avoidLog   string
+	}{
+		{
+			name:       "正常にセルを更新できる",
+			repository: &schemaRepositoryStub{profile: profile, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure, affectedRows: domain.AffectedRows{AffectedRows: 1}},
+			request:    request,
+			want:       OK(AffectedRowsResponse{AffectedRows: 1}),
+		},
+		{
+			name:       "既定値へセルを更新できる",
+			repository: &schemaRepositoryStub{profile: profile, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure, affectedRows: domain.AffectedRows{AffectedRows: 1}},
+			request:    UpdateTableCellRequest{Table: "users", Locator: []ColumnValueInputRequest{{Column: "id", Kind: "value", Value: &id}}, Column: "name", Value: TableCellResponse{Kind: "default"}},
+			want:       OK(AffectedRowsResponse{AffectedRows: 1}),
+		},
+		{
+			name:       "バリデーションエラー時はVALIDATION_FAILEDを返す",
+			repository: &schemaRepositoryStub{profile: profile, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure},
+			request:    UpdateTableCellRequest{Table: "users", Locator: []ColumnValueInputRequest{{Column: "id", Kind: "value", Value: &id}}, Column: "name", Value: TableCellResponse{Kind: "null"}},
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+		},
+		{
+			name:       "更新値の不正base64はVALIDATION_FAILEDを返し入力値をログへ出さない",
+			repository: invalidInputRepository([]domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "binary_data", DataType: "bytea"}}),
+			request:    invalidInputRequest("binary_data", "not-base64", "id", id),
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+			avoidLog:   "not-base64",
+		},
+		{
+			name:       "更新値の不正JSONはVALIDATION_FAILEDを返し入力値をログへ出さない",
+			repository: invalidInputRepository([]domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "metadata", DataType: "json"}}),
+			request:    invalidInputRequest("metadata", "{invalid", "id", id),
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+			avoidLog:   "{invalid",
+		},
+		{
+			name:       "更新値の不正RFC3339はVALIDATION_FAILEDを返し入力値をログへ出さない",
+			repository: invalidInputRepository([]domain.Column{{Name: "id", DataType: "int4", IsPrimaryKey: true}, {Name: "occurred_at", DataType: "timestamp"}}),
+			request:    invalidInputRequest("occurred_at", "not-rfc3339", "id", id),
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+			avoidLog:   "not-rfc3339",
+		},
+		{
+			name:       "位置指定値の不正base64はVALIDATION_FAILEDを返し入力値をログへ出さない",
+			repository: invalidInputRepository([]domain.Column{{Name: "binary_data", DataType: "bytea", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}),
+			request:    invalidInputRequest("name", name, "binary_data", "not-base64"),
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+			avoidLog:   "not-base64",
+		},
+		{
+			name:       "位置指定値の不正JSONはVALIDATION_FAILEDを返し入力値をログへ出さない",
+			repository: invalidInputRepository([]domain.Column{{Name: "metadata", DataType: "json", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}),
+			request:    invalidInputRequest("name", name, "metadata", "{invalid"),
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+			avoidLog:   "{invalid",
+		},
+		{
+			name:       "位置指定値の不正RFC3339はVALIDATION_FAILEDを返し入力値をログへ出さない",
+			repository: invalidInputRepository([]domain.Column{{Name: "occurred_at", DataType: "timestamp", IsPrimaryKey: true}, {Name: "name", DataType: "text"}}),
+			request:    invalidInputRequest("name", name, "occurred_at", "not-rfc3339"),
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+			wantLog:    string(apperr.CodeValidationFailed),
+			avoidLog:   "not-rfc3339",
+		},
+		{
+			name:       "更新失敗時はCELL_UPDATE_FAILEDを返し機密情報をログへ出さない",
+			repository: &schemaRepositoryStub{profile: profile, activeID: &profile.ID, credential: "secret", credentialFound: true, structure: structure, updateCellErr: errors.New("password=secret")},
+			request:    request,
+			want:       Fail[AffectedRowsResponse](apperr.New(apperr.CodeCellUpdateFailed)),
+			wantLog:    string(apperr.CodeCellUpdateFailed),
+			avoidLog:   "password=secret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), usecase.NewAppUseCase(tt.repository))
+			got := handler.UpdateTableCell(tt.request)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("UpdateTableCell() = %#v, want %#v", got, tt.want)
+			}
+			if tt.wantLog != "" && !strings.Contains(output.String(), tt.wantLog) {
+				t.Errorf("log = %q, want code %q", output.String(), tt.wantLog)
+			}
+			if tt.avoidLog != "" && strings.Contains(output.String(), tt.avoidLog) {
+				t.Errorf("log = %q, must not contain %q", output.String(), tt.avoidLog)
+			}
+			if strings.Contains(output.String(), "secret") {
+				t.Errorf("log = %q, must not contain credential", output.String())
+			}
+		})
+	}
+}
+
+// テーブルセル更新ハンドラー未設定検証
+func TestAppHandlerUpdateTableCellWithoutUseCase(t *testing.T) {
+	var output bytes.Buffer
+	handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), nil)
+
+	got := handler.UpdateTableCell(UpdateTableCellRequest{})
+	want := Fail[AffectedRowsResponse](apperr.New(apperr.CodeCellUpdateFailed))
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("UpdateTableCell() = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(output.String(), string(apperr.CodeCellUpdateFailed)) {
+		t.Errorf("log = %q, want code %q", output.String(), apperr.CodeCellUpdateFailed)
 	}
 }
