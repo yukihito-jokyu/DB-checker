@@ -26,6 +26,8 @@ type inspectionRepositoryStub struct {
 	rows            domain.TableRows
 	rowsErr         error
 	rowsQuery       domain.TableQuery
+	affectedRows    domain.AffectedRows
+	insertRowErr    error
 }
 
 // プロファイル読込再現
@@ -84,6 +86,11 @@ func (s *inspectionRepositoryStub) ListRows(_ context.Context, _ domain.Profile,
 	s.rowsQuery = query
 
 	return s.rows, s.rowsErr
+}
+
+// テーブル行追加再現
+func (s *inspectionRepositoryStub) InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error) {
+	return s.affectedRows, s.insertRowErr
 }
 
 // データベーススキーマ取得検証
@@ -158,14 +165,24 @@ func TestAppUseCaseGetDatabaseSchema(t *testing.T) {
 				schema: domain.Schema{Tables: []domain.Table{{
 					Namespace: "app",
 					Name:      "users",
-					Columns:   []domain.Column{{Name: "id", DataType: "bigint"}},
+					Columns: []domain.Column{
+						{
+							Name:     "id",
+							DataType: "bigint",
+						},
+					},
 				}}},
 			},
 			wantProfile: mysqlProfile,
 			wantSchema: domain.Schema{Tables: []domain.Table{{
 				Namespace: "app",
 				Name:      "users",
-				Columns:   []domain.Column{{Name: "id", DataType: "bigint"}},
+				Columns: []domain.Column{
+					{
+						Name:     "id",
+						DataType: "bigint",
+					},
+				},
 			}}},
 			wantResult: true,
 		},
@@ -229,7 +246,12 @@ func TestAppUseCaseGetDatabaseSchema(t *testing.T) {
 				schema: domain.Schema{Tables: []domain.Table{{
 					Namespace: "unexpected",
 					Name:      "users",
-					Columns:   []domain.Column{{Name: "id", DataType: "int"}},
+					Columns: []domain.Column{
+						{
+							Name:     "id",
+							DataType: "int",
+						},
+					},
 				}}},
 			},
 			wantCode: apperr.CodeSchemaLoadFailed,
@@ -268,8 +290,27 @@ func TestAppUseCaseGetTableStructure(t *testing.T) {
 	profilesErr := errors.New("profiles failed")
 	credentialErr := errors.New("credential failed")
 	structure := domain.TableStructure{
-		Table:   domain.Table{Namespace: "public", Name: "items", Columns: []domain.Column{{Name: "id", DataType: "int4", DefaultValue: &defaultValue, IsPrimaryKey: true, IsUnique: true}}},
-		Indexes: []domain.Index{{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"}},
+		Table: domain.Table{
+			Namespace: "public",
+			Name:      "items",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					DefaultValue: &defaultValue,
+					IsPrimaryKey: true,
+					IsUnique:     true,
+				},
+			},
+		},
+		Indexes: []domain.Index{
+			{
+				Name:    "items_pkey",
+				Columns: []string{"id"},
+				Unique:  true,
+				Kind:    "btree",
+			},
+		},
 	}
 	tests := []struct {
 		name       string
@@ -398,7 +439,16 @@ func TestAppUseCaseGetTableStructure(t *testing.T) {
 func TestAppUseCaseGetTableStatistics(t *testing.T) {
 	profile := inspectionTestProfile(t)
 	rowCount := int64(2)
-	partial := domain.TableStatistics{Table: domain.TableRef{Namespace: "public", Name: "items"}, RowCount: domain.StatisticCount{Value: &rowCount, Status: domain.StatisticsStatusComplete}}
+	partial := domain.TableStatistics{
+		Table: domain.TableRef{
+			Namespace: "public",
+			Name:      "items",
+		},
+		RowCount: domain.StatisticCount{
+			Value:  &rowCount,
+			Status: domain.StatisticsStatusComplete,
+		},
+	}
 	repositoryErr := errors.New("statistics failed")
 	tests := []struct {
 		name       string
@@ -831,4 +881,219 @@ func inspectionErrorCode(err error) apperr.Code {
 	}
 
 	return ""
+}
+
+// テーブル行追加検証
+func TestAppUseCaseInsertTableRow(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	valStr := "Alice"
+	structure := domain.TableStructure{
+		Table: domain.Table{
+			Namespace: profile.Schema,
+			Name:      "users",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int",
+					Nullable:     false,
+					DefaultValue: nil,
+					IsPrimaryKey: true,
+					IsGenerated:  true,
+				},
+				{
+					Name:         "name",
+					DataType:     "varchar(255)",
+					Nullable:     false,
+					DefaultValue: nil,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		repository *inspectionRepositoryStub
+		row        domain.InsertRow
+		want       domain.AffectedRows
+		wantCode   apperr.Code
+	}{
+		{
+			name: "正常に行を追加できる",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				affectedRows:    domain.AffectedRows{AffectedRows: 1},
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindDefault,
+					},
+					{
+						Column: "name",
+						Kind:   domain.CellKindValue,
+						Value:  &valStr,
+					},
+				},
+			},
+			want:     domain.AffectedRows{AffectedRows: 1},
+			wantCode: "",
+		},
+		{
+			name: "アクティブプロファイルなしを拒否する",
+			repository: &inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: nil,
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "入力検証エラーを拒否する",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+				Values: []domain.ColumnValueInput{
+					{Column: "name", Kind: domain.CellKindNull},
+				},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "プロファイル読み込みエラーをそのまま返す",
+			repository: &inspectionRepositoryStub{
+				loadErr: errors.New("load profiles error"),
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: "",
+		},
+		{
+			name: "アクティブプロファイルIDが不一致のときPROFILE_NOT_FOUNDを返す",
+			repository: &inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: testStringPtr("missing-id"),
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "空テーブル名時にVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: &profile.ID,
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: ""},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "資格情報取得エラー時にCREDENTIAL_UNAVAILABLEを返す",
+			repository: &inspectionRepositoryStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      &profile.ID,
+				credentialErr: errors.New("credential store error"),
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "資格情報未存在時にCREDENTIAL_UNAVAILABLEを返す",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credentialFound: false,
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "テーブル構造取得エラー時にROW_ADD_FAILEDを返す",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structureErr:    errors.New("structure inspect error"),
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeRowAddFailed,
+		},
+		{
+			name: "リポジトリエラーをROW_ADD_FAILEDへラップする",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				insertRowErr:    errors.New("db execution error"),
+			},
+			row: domain.InsertRow{
+				Table: domain.TableRef{Name: "users"},
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindDefault,
+					},
+					{
+						Column: "name",
+						Kind:   domain.CellKindValue,
+						Value:  &valStr,
+					},
+				},
+			},
+			want:     domain.AffectedRows{},
+			wantCode: apperr.CodeRowAddFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useCase := NewAppUseCase(tt.repository)
+			got, err := useCase.InsertTableRow(context.Background(), tt.row)
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Fatalf("InsertTableRow() error code = %q, wantCode %q", gotCode, tt.wantCode)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("InsertTableRow() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// テスト用文字列ポインター取得
+func testStringPtr(value string) *string {
+	return &value
 }

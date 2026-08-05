@@ -182,6 +182,52 @@ func (u *AppUseCase) ListTableRows(ctx context.Context, query domain.TableQuery)
 	return rows, nil
 }
 
+// テーブル行追加
+func (u *AppUseCase) InsertTableRow(ctx context.Context, row domain.InsertRow) (domain.AffectedRows, error) {
+	profiles, activeID, err := u.repository.LoadProfiles()
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+	if activeID == nil {
+		return domain.AffectedRows{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile, found := findProfile(profiles, *activeID)
+	if !found {
+		return domain.AffectedRows{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	ref, err := domain.NewTableRef(schemaNamespace(profile), row.Table.Name)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+	row.Table = ref
+
+	credential, found, err := u.repository.GetCredential(profile.ID)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+	if !found {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeCredentialUnavailable, errors.New("credential not found"))
+	}
+
+	structure, err := u.repository.InspectTableStructure(ctx, profile, credential, ref)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeRowAddFailed, err)
+	}
+
+	if err := row.Validate(structure.Table.Columns); err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	affected, err := u.repository.InsertRow(ctx, profile, credential, ref, row)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeRowAddFailed, err)
+	}
+
+	return affected, nil
+}
+
 // 問い合わせ列存在判定
 func tableQueryHasColumn(columns []domain.Column, name string) bool {
 	for _, column := range columns {
