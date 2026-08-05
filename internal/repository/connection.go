@@ -52,6 +52,8 @@ func connectionDSN(profile domain.Profile, password string) (string, string) {
 		config.Addr = net.JoinHostPort(profile.Host, strconv.Itoa(profile.Port))
 		config.DBName = profile.Database
 		config.TLSConfig = "false"
+		config.ParseTime = true
+		config.Loc = time.UTC
 		config.Timeout = connectionTimeout
 		config.ReadTimeout = connectionTimeout
 		config.WriteTimeout = connectionTimeout
