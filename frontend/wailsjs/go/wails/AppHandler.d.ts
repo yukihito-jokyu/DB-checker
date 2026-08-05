@@ -19,3 +19,5 @@ export function ListConnectionProfiles():Promise<wails.Response_github_com_yukih
 export function LoadFlowState():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_FlowStateResponse_>;
 
 export function SaveConnectionProfile(arg1:wails.SaveConnectionProfileRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
+
+export function SaveFlowState(arg1:wails.SaveFlowStateRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_FlowStateResponse_>;
