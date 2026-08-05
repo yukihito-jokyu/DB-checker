@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 )
@@ -243,6 +245,245 @@ func (r *AppRepository) InspectTableStructure(ctx context.Context, profile domai
 	}
 
 	return inspectTableStructure(ctx, database, profile.DBType, ref)
+}
+
+// テーブル統計取得
+func (r *AppRepository) InspectTableStatistics(ctx context.Context, profile domain.Profile, password string, ref domain.TableRef) (domain.TableStatistics, error) {
+	statistics := unavailableTableStatistics(ref)
+	driverName, dsn := connectionDSN(profile, password)
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return statistics, err
+	}
+	defer database.Close()
+
+	if err := database.PingContext(ctx); err != nil {
+		return statistics, err
+	}
+
+	return inspectTableStatistics(ctx, database, profile.DBType, ref)
+}
+
+// テーブル統計問い合わせ実行
+func inspectTableStatistics(ctx context.Context, database *sql.DB, dbType domain.DBType, ref domain.TableRef) (domain.TableStatistics, error) {
+	statistics := unavailableTableStatistics(ref)
+	structure, err := inspectTableStructure(ctx, database, dbType, ref)
+	if err != nil {
+		return statistics, err
+	}
+
+	statistics = newTableStatistics(ref, structure)
+	quotedTable := qualifiedIdentifier(dbType, ref.Namespace, ref.Name)
+	rowCount, err := queryCount(ctx, database, "SELECT COUNT(*) FROM "+quotedTable)
+	if err != nil {
+		return statistics, err
+	}
+	statistics.RowCount = availableCount(rowCount)
+
+	for index, column := range structure.Table.Columns {
+		if err := ctx.Err(); err != nil {
+			return statistics, err
+		}
+
+		columnStatistics, err := inspectColumnStatistics(ctx, database, dbType, quotedTable, column)
+		if err != nil {
+			return statistics, err
+		}
+		statistics.Columns[index] = columnStatistics
+	}
+
+	for index, foreignKey := range structure.ForeignKeys {
+		if err := ctx.Err(); err != nil {
+			return statistics, err
+		}
+
+		foreignKeyStatistics, err := inspectForeignKeyStatistics(ctx, database, dbType, ref.Namespace, ref.Name, foreignKey)
+		if err != nil {
+			return statistics, err
+		}
+		statistics.ForeignKeys[index] = foreignKeyStatistics
+	}
+
+	statistics.Status = domain.StatisticsStatusComplete
+	statistics.CollectedAt = time.Now().UTC()
+
+	return statistics, nil
+}
+
+// 未取得テーブル統計初期化
+func unavailableTableStatistics(ref domain.TableRef) domain.TableStatistics {
+	return domain.TableStatistics{
+		Table:    ref,
+		RowCount: unavailableCount(),
+		Status:   domain.StatisticsStatusTimeout,
+	}
+}
+
+// テーブル統計初期化
+func newTableStatistics(ref domain.TableRef, structure domain.TableStructure) domain.TableStatistics {
+	columns := make([]domain.ColumnStatistics, 0, len(structure.Table.Columns))
+	for _, column := range structure.Table.Columns {
+		columns = append(columns, domain.ColumnStatistics{
+			Name:           column.Name,
+			NullCount:      unavailableCount(),
+			DistinctCount:  unavailableCount(),
+			DuplicateCount: unavailableCount(),
+			Min:            unavailableValue("not collected"),
+			Max:            unavailableValue("not collected"),
+		})
+	}
+	foreignKeys := make([]domain.ForeignKeyStatistics, 0, len(structure.ForeignKeys))
+	for _, foreignKey := range structure.ForeignKeys {
+		foreignKeys = append(foreignKeys, domain.ForeignKeyStatistics{
+			Name:                  foreignKey.Name,
+			FromColumns:           foreignKey.FromColumns,
+			ToTable:               foreignKey.ToTable,
+			ToColumns:             foreignKey.ToColumns,
+			SourceRowCount:        unavailableCount(),
+			NullCount:             unavailableCount(),
+			ReferencedRowCount:    unavailableCount(),
+			MissingReferenceCount: unavailableCount(),
+		})
+	}
+
+	return domain.TableStatistics{
+		Table:       ref,
+		RowCount:    unavailableCount(),
+		ColumnCount: len(structure.Table.Columns),
+		Status:      domain.StatisticsStatusTimeout,
+		Columns:     columns,
+		ForeignKeys: foreignKeys,
+	}
+}
+
+// カラム統計取得
+func inspectColumnStatistics(ctx context.Context, database *sql.DB, dbType domain.DBType, quotedTable string, column domain.Column) (domain.ColumnStatistics, error) {
+	quotedColumn := quoteIdentifier(dbType, column.Name)
+	var nullCount int64
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) - COUNT("+quotedColumn+") FROM "+quotedTable).Scan(&nullCount); err != nil {
+		return domain.ColumnStatistics{}, err
+	}
+	if !supportsMinMax(column.DataType) {
+		return domain.ColumnStatistics{
+			Name:           column.Name,
+			NullCount:      availableCount(nullCount),
+			DistinctCount:  unavailableCount(),
+			DuplicateCount: unavailableCount(),
+			Min:            unavailableValue("unsupported data type"),
+			Max:            unavailableValue("unsupported data type"),
+		}, nil
+	}
+
+	query := "SELECT COUNT(DISTINCT " + quotedColumn + "), MIN(" + quotedColumn + "), MAX(" + quotedColumn + ") FROM " + quotedTable
+	var distinctCount int64
+	var minValue, maxValue sql.NullString
+	if err := database.QueryRowContext(ctx, query).Scan(&distinctCount, &minValue, &maxValue); err != nil {
+		return domain.ColumnStatistics{}, err
+	}
+
+	duplicateCount := int64(0)
+	if distinctCount > 0 {
+		// 重複数は NULL を除く行数から distinct 数を引く。
+		var nonNullCount int64
+		if err := database.QueryRowContext(ctx, "SELECT COUNT("+quotedColumn+") FROM "+quotedTable).Scan(&nonNullCount); err != nil {
+			return domain.ColumnStatistics{}, err
+		}
+		duplicateCount = nonNullCount - distinctCount
+	}
+
+	statistics := domain.ColumnStatistics{Name: column.Name, NullCount: availableCount(nullCount), DistinctCount: availableCount(distinctCount), DuplicateCount: availableCount(duplicateCount)}
+	statistics.Min = availableValue(minValue)
+	statistics.Max = availableValue(maxValue)
+
+	return statistics, nil
+}
+
+// 外部キー統計取得
+func inspectForeignKeyStatistics(ctx context.Context, database *sql.DB, dbType domain.DBType, namespace, table string, foreignKey domain.ForeignKey) (domain.ForeignKeyStatistics, error) {
+	source := qualifiedIdentifier(dbType, namespace, table)
+	target := qualifiedIdentifier(dbType, namespace, foreignKey.ToTable)
+	joins := make([]string, 0, len(foreignKey.FromColumns))
+	nulls := make([]string, 0, len(foreignKey.FromColumns))
+	for index, fromColumn := range foreignKey.FromColumns {
+		from := "src." + quoteIdentifier(dbType, fromColumn)
+		joins = append(joins, from+" = dst."+quoteIdentifier(dbType, foreignKey.ToColumns[index]))
+		nulls = append(nulls, from+" IS NULL")
+	}
+	query := "SELECT COUNT(*), COALESCE(SUM(CASE WHEN " + strings.Join(nulls, " OR ") + " THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN " + strings.Join(nulls, " OR ") + " THEN 0 WHEN dst." + quoteIdentifier(dbType, foreignKey.ToColumns[0]) + " IS NULL THEN 0 ELSE 1 END), 0) FROM " + source + " src LEFT JOIN " + target + " dst ON " + strings.Join(joins, " AND ")
+	var sourceCount, nullCount, referencedCount int64
+	if err := database.QueryRowContext(ctx, query).Scan(&sourceCount, &nullCount, &referencedCount); err != nil {
+		return domain.ForeignKeyStatistics{}, err
+	}
+
+	return domain.ForeignKeyStatistics{Name: foreignKey.Name, FromColumns: foreignKey.FromColumns, ToTable: foreignKey.ToTable, ToColumns: foreignKey.ToColumns, SourceRowCount: availableCount(sourceCount), NullCount: availableCount(nullCount), ReferencedRowCount: availableCount(referencedCount), MissingReferenceCount: availableCount(sourceCount - nullCount - referencedCount)}, nil
+}
+
+// 件数問い合わせ実行
+func queryCount(ctx context.Context, database *sql.DB, query string) (int64, error) {
+	var count int64
+	if err := database.QueryRowContext(ctx, query).Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+// 利用可能件数生成
+func availableCount(value int64) domain.StatisticCount {
+	return domain.StatisticCount{Value: &value, Status: domain.StatisticsStatusComplete}
+}
+
+// 未取得件数生成
+func unavailableCount() domain.StatisticCount {
+	reason := "not collected"
+
+	return domain.StatisticCount{Status: domain.StatisticsStatusUnavailable, Reason: &reason}
+}
+
+// 利用可能値生成
+func availableValue(value sql.NullString) domain.StatisticValue {
+	if !value.Valid {
+		return domain.StatisticValue{Status: domain.StatisticsStatusComplete}
+	}
+
+	return domain.StatisticValue{Value: &value.String, Status: domain.StatisticsStatusComplete}
+}
+
+// 未取得値生成
+func unavailableValue(reason string) domain.StatisticValue {
+	return domain.StatisticValue{Status: domain.StatisticsStatusUnavailable, Reason: &reason}
+}
+
+// 最小最大値対応判定
+func supportsMinMax(dataType string) bool {
+	typeName := strings.ToLower(strings.TrimSpace(dataType))
+	if index := strings.IndexByte(typeName, '('); index >= 0 {
+		typeName = strings.TrimSpace(typeName[:index])
+	}
+	if index := strings.IndexByte(typeName, ' '); index >= 0 {
+		typeName = strings.TrimSpace(typeName[:index])
+	}
+
+	switch typeName {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "int2", "int4", "int8", "serial", "bigserial", "decimal", "numeric", "real", "float", "float4", "float8", "double", "date", "time", "timetz", "timestamp", "timestamptz", "datetime", "year", "char", "varchar", "text", "tinytext", "mediumtext", "longtext", "enum", "set", "citext", "name":
+		return true
+	default:
+		return false
+	}
+}
+
+// 識別子引用
+func quoteIdentifier(dbType domain.DBType, identifier string) string {
+	if dbType == domain.DBTypeMySQL {
+		return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
+	}
+
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+// 修飾識別子生成
+func qualifiedIdentifier(dbType domain.DBType, namespace, table string) string {
+	return quoteIdentifier(dbType, namespace) + "." + quoteIdentifier(dbType, table)
 }
 
 // テーブル構造問い合わせ実行

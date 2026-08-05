@@ -77,6 +77,9 @@ func (c *inspectionTestConnection) QueryContext(_ context.Context, query string,
 	if response.err != nil {
 		return nil, response.err
 	}
+	if response.after != nil {
+		response.after()
+	}
 
 	return &inspectionTestRows{response: response, errorAt: response.errorAt}, nil
 }
@@ -96,6 +99,7 @@ type inspectionTestResponse struct {
 	err     error
 	rowErr  error
 	errorAt int
+	after   func()
 }
 
 type inspectionTestRows struct {
@@ -160,6 +164,525 @@ func assertInspectionQueriesConsumed(t *testing.T, scenario *inspectionTestScena
 	if got := len(scenario.responses); got != 0 {
 		t.Errorf("unconsumed queries = %d, want 0", got)
 	}
+}
+
+// 最小最大値対応型判定検証
+func TestSupportsMinMax(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType string
+		want     bool
+	}{
+		{
+			name:     "MySQL数値型を許可する",
+			dataType: "decimal(10,2)",
+			want:     true,
+		},
+		{
+			name:     "PostgreSQL日時型を許可する",
+			dataType: "timestamptz",
+			want:     true,
+		},
+		{
+			name:     "空白を含む型名を許可する",
+			dataType: "double precision",
+			want:     true,
+		},
+		{
+			name:     "PostgreSQL点型を拒否する",
+			dataType: "point",
+			want:     false,
+		},
+		{
+			name:     "PostgreSQL間隔型を拒否する",
+			dataType: "interval",
+			want:     false,
+		},
+		{
+			name:     "バイナリ型を拒否する",
+			dataType: "bytea",
+			want:     false,
+		},
+		{
+			name:     "JSON型を拒否する",
+			dataType: "jsonb",
+			want:     false,
+		},
+		{
+			name:     "配列型を拒否する",
+			dataType: "_int4",
+			want:     false,
+		},
+		{
+			name:     "範囲型を拒否する",
+			dataType: "int4range",
+			want:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := supportsMinMax(tt.dataType); got != tt.want {
+				t.Errorf("supportsMinMax(%q) = %v, want %v", tt.dataType, got, tt.want)
+			}
+		})
+	}
+}
+
+// 構造取得前タイムアウト統計検証
+func TestInspectTableStatisticsReturnsUnavailableDataBeforeStructure(t *testing.T) {
+	database, scenario := newInspectionTestDatabase(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+
+	statistics, err := inspectTableStatistics(ctx, database, domain.DBTypePostgres, ref)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("inspectTableStatistics() error = %v, want %v", err, context.Canceled)
+	}
+	if statistics.Table != ref {
+		t.Errorf("Table = %#v, want %#v", statistics.Table, ref)
+	}
+	if statistics.RowCount.Status != domain.StatisticsStatusUnavailable || statistics.RowCount.Reason == nil || *statistics.RowCount.Reason != "not collected" {
+		t.Errorf("RowCount = %#v, want unavailable not collected", statistics.RowCount)
+	}
+	if !statistics.CollectedAt.IsZero() {
+		t.Errorf("CollectedAt = %v, want zero time", statistics.CollectedAt)
+	}
+	assertInspectionQueriesConsumed(t, scenario)
+}
+
+// 統計取得成功応答生成
+func tableStatisticsSuccessResponses() []inspectionTestResponse {
+	return []inspectionTestResponse{
+		{
+			query:   postgresTableStructureColumnQuery,
+			columns: []string{"name", "type", "nullable", "default", "generated", "primary", "foreign", "unique"},
+			values: [][]driver.Value{{
+				"id",
+				"int4",
+				false,
+				nil,
+				false,
+				true,
+				false,
+				true,
+			}},
+			errorAt: -1,
+		},
+		{
+			query:   postgresTableStructureForeignKeyQuery,
+			columns: []string{"name", "from_table", "from_column", "to_table", "to_column"},
+			errorAt: -1,
+		},
+		{
+			query:   postgresTableStructureIndexQuery,
+			columns: []string{"name", "column", "unique", "kind"},
+			errorAt: -1,
+		},
+		{
+			query:   `SELECT COUNT(*) FROM "public"."items"`,
+			columns: []string{"count"},
+			values:  [][]driver.Value{{int64(3)}},
+			errorAt: -1,
+		},
+		{
+			query:   `SELECT COUNT(*) - COUNT("id") FROM "public"."items"`,
+			columns: []string{"null_count"},
+			values:  [][]driver.Value{{int64(1)}},
+			errorAt: -1,
+		},
+		{
+			query:   `SELECT COUNT(DISTINCT "id"), MIN("id"), MAX("id") FROM "public"."items"`,
+			columns: []string{"distinct_count", "min", "max"},
+			values:  [][]driver.Value{{int64(2), "1", "3"}},
+			errorAt: -1,
+		},
+		{
+			query:   `SELECT COUNT("id") FROM "public"."items"`,
+			columns: []string{"non_null_count"},
+			values:  [][]driver.Value{{int64(2)}},
+			errorAt: -1,
+		},
+	}
+}
+
+// 外部キーを含むテーブル統計成功応答生成
+func tableStatisticsWithForeignKeyResponses() []inspectionTestResponse {
+	responses := tableStatisticsSuccessResponses()
+	responses[0].values = [][]driver.Value{{"parent_id", "int4", false, nil, false, false, true, false}}
+	responses[1].values = [][]driver.Value{{"fk_items_parent", "items", "parent_id", "parents", "id"}}
+	responses[4].query = `SELECT COUNT(*) - COUNT("parent_id") FROM "public"."items"`
+	responses[5].query = `SELECT COUNT(DISTINCT "parent_id"), MIN("parent_id"), MAX("parent_id") FROM "public"."items"`
+	responses[6].query = `SELECT COUNT("parent_id") FROM "public"."items"`
+	responses = append(responses, inspectionTestResponse{
+		query:   `SELECT COUNT(*), COALESCE(SUM(CASE WHEN src."parent_id" IS NULL THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN src."parent_id" IS NULL THEN 0 WHEN dst."id" IS NULL THEN 0 ELSE 1 END), 0) FROM "public"."items" src LEFT JOIN "public"."parents" dst ON src."parent_id" = dst."id"`,
+		columns: []string{"source", "nulls", "referenced"},
+		values:  [][]driver.Value{{int64(3), int64(1), int64(2)}},
+		errorAt: -1,
+	})
+
+	return responses
+}
+
+// テーブル統計問い合わせ成功検証
+func TestInspectTableStatistics(t *testing.T) {
+	database, scenario := newInspectionTestDatabase(t, tableStatisticsSuccessResponses())
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+
+	statistics, err := inspectTableStatistics(context.Background(), database, domain.DBTypePostgres, ref)
+	if err != nil {
+		t.Fatalf("inspectTableStatistics() error = %v", err)
+	}
+	if statistics.Status != domain.StatisticsStatusComplete {
+		t.Errorf("Status = %q, want %q", statistics.Status, domain.StatisticsStatusComplete)
+	}
+	if statistics.RowCount.Value == nil || *statistics.RowCount.Value != 3 {
+		t.Errorf("RowCount = %#v, want 3", statistics.RowCount)
+	}
+	if len(statistics.Columns) != 1 {
+		t.Fatalf("Columns length = %d, want 1", len(statistics.Columns))
+	}
+	column := statistics.Columns[0]
+	if column.DuplicateCount.Value == nil || *column.DuplicateCount.Value != 0 {
+		t.Errorf("DuplicateCount = %#v, want 0", column.DuplicateCount)
+	}
+	if column.Min.Value == nil || *column.Min.Value != "1" {
+		t.Errorf("Min = %#v, want 1", column.Min)
+	}
+	if column.Max.Value == nil || *column.Max.Value != "3" {
+		t.Errorf("Max = %#v, want 3", column.Max)
+	}
+	if statistics.CollectedAt.IsZero() {
+		t.Error("CollectedAt is zero, want collected time")
+	}
+	assertInspectionQueriesConsumed(t, scenario)
+}
+
+// 未対応型カラム統計検証
+func TestInspectColumnStatisticsForUnsupportedType(t *testing.T) {
+	database, scenario := newInspectionTestDatabase(t, []inspectionTestResponse{{
+		query:   `SELECT COUNT(*) - COUNT("payload") FROM "public"."items"`,
+		columns: []string{"null_count"},
+		values:  [][]driver.Value{{int64(1)}},
+		errorAt: -1,
+	}})
+
+	statistics, err := inspectColumnStatistics(context.Background(), database, domain.DBTypePostgres, `"public"."items"`, domain.Column{Name: "payload", DataType: "jsonb"})
+	if err != nil {
+		t.Fatalf("inspectColumnStatistics() error = %v", err)
+	}
+	if statistics.Min.Reason == nil || *statistics.Min.Reason != "unsupported data type" {
+		t.Errorf("Min = %#v, want unsupported data type", statistics.Min)
+	}
+	if statistics.DistinctCount.Status != domain.StatisticsStatusUnavailable {
+		t.Errorf("DistinctCount.Status = %q, want %q", statistics.DistinctCount.Status, domain.StatisticsStatusUnavailable)
+	}
+	assertInspectionQueriesConsumed(t, scenario)
+}
+
+// テーブル統計メタデータ接続検証
+func TestAppRepositoryInspectTableStatistics(t *testing.T) {
+	profile := connectionTestProfile(t, domain.DBTypePostgres)
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+	originalOpenDatabase := openDatabase
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+
+	tests := []struct {
+		name      string
+		open      func(string, string) (*sql.DB, error)
+		ctx       context.Context
+		wantError string
+		wantCount *int64
+	}{
+		{
+			name: "データベース接続生成失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			ctx:       context.Background(),
+			wantError: "open failed",
+		},
+		{
+			name: "Ping失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, nil)
+
+				return database, nil
+			},
+			ctx:       canceledInspectionContext(),
+			wantError: context.Canceled.Error(),
+		},
+		{
+			name: "統計を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, tableStatisticsSuccessResponses())
+
+				return database, nil
+			},
+			ctx:       context.Background(),
+			wantCount: int64Pointer(3),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openDatabase = tt.open
+
+			statistics, err := NewAppRepository(nil).InspectTableStatistics(tt.ctx, profile, "secret", ref)
+			if tt.wantError != "" {
+				if err == nil || err.Error() != tt.wantError {
+					t.Errorf("InspectTableStatistics() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("InspectTableStatistics() error = %v", err)
+			}
+			if statistics.RowCount.Value == nil {
+				t.Fatal("RowCount.Value = nil, want value")
+			}
+			if *statistics.RowCount.Value != *tt.wantCount {
+				t.Errorf("RowCount.Value = %d, want %d", *statistics.RowCount.Value, *tt.wantCount)
+			}
+		})
+	}
+}
+
+// int64ポインター生成
+func int64Pointer(value int64) *int64 {
+	return &value
+}
+
+// 統計取得失敗経路検証
+func TestInspectTableStatisticsErrors(t *testing.T) {
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+	tests := []struct {
+		name      string
+		responses []inspectionTestResponse
+		ctx       context.Context
+		wantError string
+	}{
+		{
+			name: "行数取得失敗を返す",
+			responses: func() []inspectionTestResponse {
+				responses := tableStatisticsSuccessResponses()
+				responses[3].err = errors.New("row count failed")
+
+				return responses[:4]
+			}(),
+			ctx:       context.Background(),
+			wantError: "row count failed",
+		},
+		{
+			name: "カラム統計取得失敗を返す",
+			responses: func() []inspectionTestResponse {
+				responses := tableStatisticsSuccessResponses()
+				responses[4].err = errors.New("column statistics failed")
+
+				return responses[:5]
+			}(),
+			ctx:       context.Background(),
+			wantError: "column statistics failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, _ := newInspectionTestDatabase(t, tt.responses)
+
+			_, err := inspectTableStatistics(tt.ctx, database, domain.DBTypePostgres, ref)
+			if err == nil || err.Error() != tt.wantError {
+				t.Errorf("inspectTableStatistics() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+// テーブル統計カラム開始前キャンセル検証
+func TestInspectTableStatisticsStopsBeforeColumn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	responses := tableStatisticsSuccessResponses()
+	responses[3].after = cancel
+	database, _ := newInspectionTestDatabase(t, responses[:4])
+
+	_, err := inspectTableStatistics(ctx, database, domain.DBTypePostgres, domain.TableRef{Namespace: "public", Name: "items"})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("inspectTableStatistics() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+// 外部キーを含むテーブル統計検証
+func TestInspectTableStatisticsWithForeignKey(t *testing.T) {
+	database, scenario := newInspectionTestDatabase(t, tableStatisticsWithForeignKeyResponses())
+
+	statistics, err := inspectTableStatistics(context.Background(), database, domain.DBTypePostgres, domain.TableRef{Namespace: "public", Name: "items"})
+	if err != nil {
+		t.Fatalf("inspectTableStatistics() error = %v", err)
+	}
+	if len(statistics.ForeignKeys) != 1 {
+		t.Fatalf("ForeignKeys length = %d, want 1", len(statistics.ForeignKeys))
+	}
+	if statistics.ForeignKeys[0].MissingReferenceCount.Value == nil || *statistics.ForeignKeys[0].MissingReferenceCount.Value != 0 {
+		t.Errorf("MissingReferenceCount = %#v, want 0", statistics.ForeignKeys[0].MissingReferenceCount)
+	}
+	assertInspectionQueriesConsumed(t, scenario)
+}
+
+// テーブル統計外部キー開始前キャンセル検証
+func TestInspectTableStatisticsStopsBeforeForeignKey(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	responses := tableStatisticsWithForeignKeyResponses()
+	responses[6].after = cancel
+	database, _ := newInspectionTestDatabase(t, responses[:7])
+
+	_, err := inspectTableStatistics(ctx, database, domain.DBTypePostgres, domain.TableRef{Namespace: "public", Name: "items"})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("inspectTableStatistics() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+// テーブル統計外部キー取得失敗検証
+func TestInspectTableStatisticsReturnsForeignKeyError(t *testing.T) {
+	responses := tableStatisticsWithForeignKeyResponses()
+	responses[7].err = errors.New("foreign key statistics failed")
+	database, _ := newInspectionTestDatabase(t, responses)
+
+	_, err := inspectTableStatistics(context.Background(), database, domain.DBTypePostgres, domain.TableRef{Namespace: "public", Name: "items"})
+	if err == nil || err.Error() != "foreign key statistics failed" {
+		t.Errorf("inspectTableStatistics() error = %v, want %q", err, "foreign key statistics failed")
+	}
+}
+
+// カラム統計問い合わせ失敗検証
+func TestInspectColumnStatisticsReturnsQueryErrors(t *testing.T) {
+	column := domain.Column{Name: "id", DataType: "int4"}
+	tests := []struct {
+		name      string
+		responses []inspectionTestResponse
+		wantError string
+	}{
+		{
+			name: "NULL件数取得失敗を返す",
+			responses: []inspectionTestResponse{{
+				query: `SELECT COUNT(*) - COUNT("id") FROM "public"."items"`, err: errors.New("null count failed"),
+			}},
+			wantError: "null count failed",
+		},
+		{
+			name: "最小最大値取得失敗を返す",
+			responses: []inspectionTestResponse{
+				{query: `SELECT COUNT(*) - COUNT("id") FROM "public"."items"`, columns: []string{"null_count"}, values: [][]driver.Value{{int64(0)}}, errorAt: -1},
+				{query: `SELECT COUNT(DISTINCT "id"), MIN("id"), MAX("id") FROM "public"."items"`, err: errors.New("min max failed")},
+			},
+			wantError: "min max failed",
+		},
+		{
+			name: "非NULL件数取得失敗を返す",
+			responses: []inspectionTestResponse{
+				{query: `SELECT COUNT(*) - COUNT("id") FROM "public"."items"`, columns: []string{"null_count"}, values: [][]driver.Value{{int64(0)}}, errorAt: -1},
+				{query: `SELECT COUNT(DISTINCT "id"), MIN("id"), MAX("id") FROM "public"."items"`, columns: []string{"distinct_count", "min", "max"}, values: [][]driver.Value{{int64(1), nil, nil}}, errorAt: -1},
+				{query: `SELECT COUNT("id") FROM "public"."items"`, err: errors.New("non-null count failed")},
+			},
+			wantError: "non-null count failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, _ := newInspectionTestDatabase(t, tt.responses)
+
+			_, err := inspectColumnStatistics(context.Background(), database, domain.DBTypePostgres, `"public"."items"`, column)
+			if err == nil || err.Error() != tt.wantError {
+				t.Errorf("inspectColumnStatistics() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+// 外部キー統計問い合わせ失敗検証
+func TestInspectForeignKeyStatisticsReturnsQueryError(t *testing.T) {
+	foreignKey := domain.ForeignKey{Name: "fk_items_parent", FromColumns: []string{"parent_id"}, ToTable: "parents", ToColumns: []string{"id"}}
+	database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{{
+		query: `SELECT COUNT(*), COALESCE(SUM(CASE WHEN src."parent_id" IS NULL THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN src."parent_id" IS NULL THEN 0 WHEN dst."id" IS NULL THEN 0 ELSE 1 END), 0) FROM "public"."items" src LEFT JOIN "public"."parents" dst ON src."parent_id" = dst."id"`,
+		err:   errors.New("foreign key query failed"),
+	}})
+
+	_, err := inspectForeignKeyStatistics(context.Background(), database, domain.DBTypePostgres, "public", "items", foreignKey)
+	if err == nil || err.Error() != "foreign key query failed" {
+		t.Errorf("inspectForeignKeyStatistics() error = %v, want %q", err, "foreign key query failed")
+	}
+}
+
+// 統計補助関数検証
+func TestStatisticHelpers(t *testing.T) {
+	tests := []struct {
+		name       string
+		dbType     domain.DBType
+		identifier string
+		wantQuoted string
+		value      sql.NullString
+		wantValue  *string
+	}{
+		{
+			name:       "MySQL識別子を引用する",
+			dbType:     domain.DBTypeMySQL,
+			identifier: "table`name",
+			wantQuoted: "`table``name`",
+			value:      sql.NullString{String: "value", Valid: true},
+			wantValue:  stringPointer("value"),
+		},
+		{
+			name:       "NULL最小値を値なしで返す",
+			dbType:     domain.DBTypePostgres,
+			identifier: "table",
+			wantQuoted: `"table"`,
+			value:      sql.NullString{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := quoteIdentifier(tt.dbType, tt.identifier); got != tt.wantQuoted {
+				t.Errorf("quoteIdentifier() = %q, want %q", got, tt.wantQuoted)
+			}
+			if got := availableValue(tt.value); !reflect.DeepEqual(got.Value, tt.wantValue) {
+				t.Errorf("availableValue() = %#v, want value %#v", got, tt.wantValue)
+			}
+		})
+	}
+	if got := unavailableValue("reason"); got.Reason == nil || *got.Reason != "reason" {
+		t.Errorf("unavailableValue() = %#v, want reason", got)
+	}
+}
+
+// 外部キー欠損参照集計検証
+func TestInspectForeignKeyStatisticsCountsMissingReferences(t *testing.T) {
+	foreignKey := domain.ForeignKey{
+		Name:        "fk_child_parent",
+		FromColumns: []string{"parent_id"},
+		ToTable:     "parents",
+		ToColumns:   []string{"id"},
+	}
+	query := "SELECT COUNT(*), COALESCE(SUM(CASE WHEN src.\"parent_id\" IS NULL THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN src.\"parent_id\" IS NULL THEN 0 WHEN dst.\"id\" IS NULL THEN 0 ELSE 1 END), 0) FROM \"public\".\"children\" src LEFT JOIN \"public\".\"parents\" dst ON src.\"parent_id\" = dst.\"id\""
+	database, scenario := newInspectionTestDatabase(t, []inspectionTestResponse{{
+		query:   query,
+		columns: []string{"source", "nulls", "referenced"},
+		errorAt: -1,
+		values: [][]driver.Value{{
+			int64(3),
+			int64(1),
+			int64(1),
+		}},
+	}})
+
+	statistics, err := inspectForeignKeyStatistics(context.Background(), database, domain.DBTypePostgres, "public", "children", foreignKey)
+	if err != nil {
+		t.Fatalf("inspectForeignKeyStatistics() error = %v", err)
+	}
+	if statistics.MissingReferenceCount.Value == nil || *statistics.MissingReferenceCount.Value != 1 {
+		t.Errorf("MissingReferenceCount = %#v, want 1", statistics.MissingReferenceCount)
+	}
+	assertInspectionQueriesConsumed(t, scenario)
 }
 
 // スキーマメタデータ取得検証
