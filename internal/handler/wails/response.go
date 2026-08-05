@@ -68,6 +68,36 @@ type DatabaseColumnResponse struct {
 	IsUnique     bool   `json:"isUnique"`
 }
 
+type TableStructureColumnResponse struct {
+	Name         string  `json:"name"`
+	DataType     string  `json:"dataType"`
+	Nullable     bool    `json:"nullable"`
+	DefaultValue *string `json:"defaultValue"`
+	IsPrimaryKey bool    `json:"isPrimaryKey"`
+	IsForeignKey bool    `json:"isForeignKey"`
+	IsUnique     bool    `json:"isUnique"`
+	IsGenerated  bool    `json:"isGenerated"`
+}
+
+type TableStructureTableResponse struct {
+	Namespace string                         `json:"namespace"`
+	Name      string                         `json:"name"`
+	Columns   []TableStructureColumnResponse `json:"columns"`
+}
+
+type TableStructureIndexResponse struct {
+	Name    string   `json:"name"`
+	Columns []string `json:"columns"`
+	Unique  bool     `json:"unique"`
+	Kind    string   `json:"kind"`
+}
+
+type TableStructureResponse struct {
+	Table       TableStructureTableResponse   `json:"table"`
+	ForeignKeys []DatabaseForeignKeyResponse  `json:"foreignKeys"`
+	Indexes     []TableStructureIndexResponse `json:"indexes"`
+}
+
 type DatabaseTableResponse struct {
 	Namespace string                   `json:"namespace"`
 	Name      string                   `json:"name"`

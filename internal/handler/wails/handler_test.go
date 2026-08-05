@@ -42,6 +42,11 @@ func (s *connectionProfileRepositoryStub) InspectSchema(context.Context, domain.
 	return domain.Schema{}, nil
 }
 
+// テーブル構造取得再現
+func (*connectionProfileRepositoryStub) InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error) {
+	return domain.TableStructure{}, nil
+}
+
 // フロー状態読込再現
 func (s *connectionProfileRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
 	return s.flowState, s.flowStateErr
