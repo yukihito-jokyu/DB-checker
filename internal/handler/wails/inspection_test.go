@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
@@ -25,6 +28,9 @@ type schemaRepositoryStub struct {
 	inspectErr      error
 	structure       domain.TableStructure
 	structureErr    error
+	statistics      domain.TableStatistics
+	statisticsErr   error
+	statisticsFunc  func(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error)
 	flowState       domain.FlowState
 	flowStateErr    error
 }
@@ -69,6 +75,15 @@ func (s *schemaRepositoryStub) InspectSchema(context.Context, domain.Profile, st
 // テーブル構造取得再現
 func (s *schemaRepositoryStub) InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error) {
 	return s.structure, s.structureErr
+}
+
+// テーブル統計取得再現
+func (s *schemaRepositoryStub) InspectTableStatistics(ctx context.Context, profile domain.Profile, credential string, ref domain.TableRef) (domain.TableStatistics, error) {
+	if s.statisticsFunc != nil {
+		return s.statisticsFunc(ctx, profile, credential, ref)
+	}
+
+	return s.statistics, s.statisticsErr
 }
 
 // データベーススキーマ取得レスポンス検証
@@ -257,6 +272,130 @@ func TestAppHandlerGetTableStructure(t *testing.T) {
 				assertSafeSchemaFailureLog(t, output.String())
 			}
 		})
+	}
+}
+
+// テーブル統計レスポンス検証
+func TestAppHandlerGetTableStatistics(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	rowCount := int64(3)
+	nullCount := int64(1)
+	minimum := "a"
+	statistics := domain.TableStatistics{
+		Table:       domain.TableRef{Namespace: "public", Name: "items"},
+		RowCount:    domain.StatisticCount{Value: &rowCount, Status: domain.StatisticsStatusComplete},
+		ColumnCount: 1,
+		CollectedAt: time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC),
+		Status:      domain.StatisticsStatusComplete,
+		Columns: []domain.ColumnStatistics{{
+			Name:           "name",
+			NullCount:      domain.StatisticCount{Value: &nullCount, Status: domain.StatisticsStatusComplete},
+			DistinctCount:  domain.StatisticCount{Status: domain.StatisticsStatusUnavailable, Reason: stringPointer("not collected")},
+			DuplicateCount: domain.StatisticCount{Status: domain.StatisticsStatusUnavailable, Reason: stringPointer("not collected")},
+			Min:            domain.StatisticValue{Value: &minimum, Status: domain.StatisticsStatusComplete},
+			Max:            domain.StatisticValue{Status: domain.StatisticsStatusUnavailable, Reason: stringPointer("unsupported data type")},
+		}},
+	}
+	tests := []struct {
+		name       string
+		repository schemaRepositoryStub
+		wantCode   apperr.Code
+		wantData   bool
+	}{
+		{
+			name: "統計DTOの項目状態を返す",
+			repository: schemaRepositoryStub{
+				profile:         profile,
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				statistics:      statistics,
+			},
+			wantData: true,
+		},
+		{
+			name:     "未注入ユースケースを安全な失敗で返す",
+			wantCode: apperr.CodeStatsLoadFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := applogger.NewWithWriter(io.Discard, slog.LevelDebug)
+			var appUseCase *usecase.AppUseCase
+			if tt.repository.activeID != nil {
+				appUseCase = usecase.NewAppUseCase(&tt.repository)
+			}
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+			got := handler.GetTableStatistics("items")
+			if tt.wantData {
+				if got.Data == nil {
+					t.Fatal("GetTableStatistics() Data = nil, want non-nil")
+				}
+				if got.Error != nil {
+					t.Errorf("GetTableStatistics() Error = %#v, want nil", got.Error)
+				}
+				if got.Data.Table != "items" || got.Data.RowCount.Value == nil || *got.Data.RowCount.Value != rowCount || got.Data.Columns[0].DistinctCount.Status != string(domain.StatisticsStatusUnavailable) || got.Data.Columns[0].Min.Value == nil || *got.Data.Columns[0].Min.Value != minimum {
+					t.Errorf("GetTableStatistics() Data = %#v, want converted statistics", got.Data)
+				}
+
+				return
+			}
+			if got.Error == nil {
+				t.Fatal("GetTableStatistics() Error = nil, want non-nil")
+			}
+			if got.Error.Code != string(tt.wantCode) {
+				t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// テーブル統計要求競合検証
+func TestAppHandlerGetTableStatisticsCancelsPreviousRequest(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var calls atomic.Int32
+	repository := schemaRepositoryStub{
+		profile:         profile,
+		activeID:        stringPointer(profile.ID),
+		credential:      "secret",
+		credentialFound: true,
+		statisticsFunc: func(ctx context.Context, _ domain.Profile, _ string, ref domain.TableRef) (domain.TableStatistics, error) {
+			switch calls.Add(1) {
+			case 1:
+				close(firstStarted)
+				<-ctx.Done()
+
+				return domain.TableStatistics{Table: ref}, ctx.Err()
+			case 2:
+				close(secondStarted)
+
+				return domain.TableStatistics{Table: ref, Status: domain.StatisticsStatusComplete}, nil
+			default:
+				return domain.TableStatistics{Table: ref, Status: domain.StatisticsStatusComplete}, nil
+			}
+		},
+	}
+	handler := NewAppHandler(applogger.NewWithWriter(io.Discard, slog.LevelDebug), config.NewStore(t.TempDir()), usecase.NewAppUseCase(&repository))
+	firstResult := make(chan Response[TableStatisticsResponse], 1)
+	go func() {
+		firstResult <- handler.GetTableStatistics("first")
+	}()
+	<-firstStarted
+	secondResult := handler.GetTableStatistics("second")
+	<-secondStarted
+
+	if secondResult.Data == nil || secondResult.Data.Table != "second" || secondResult.Error != nil {
+		t.Errorf("second GetTableStatistics() = %#v, want successful second result", secondResult)
+	}
+	first := <-firstResult
+	if first.Error == nil || first.Error.Code != string(apperr.CodeOperationCanceled) {
+		t.Errorf("first GetTableStatistics() = %#v, want canceled error", first)
+	}
+	thirdResult := handler.GetTableStatistics("third")
+	if thirdResult.Data == nil || thirdResult.Data.Table != "third" || thirdResult.Error != nil {
+		t.Errorf("third GetTableStatistics() = %#v, want successful result after stale cleanup", thirdResult)
 	}
 }
 
