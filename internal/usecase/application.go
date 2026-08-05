@@ -17,6 +17,7 @@ type AppRepository interface {
 	DeleteCredential(string) error
 	CheckConnection(context.Context, domain.Profile, string) error
 	InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error)
+	InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error)
 }
 
 // アプリケーションユースケース

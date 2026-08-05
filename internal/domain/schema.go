@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var ErrInvalidSchema = errors.New("invalid schema")
@@ -17,9 +18,29 @@ type Column struct {
 	Name         string
 	DataType     string
 	Nullable     bool
+	DefaultValue *string
 	IsPrimaryKey bool
 	IsForeignKey bool
 	IsUnique     bool
+	IsGenerated  bool
+}
+
+type TableRef struct {
+	Namespace string
+	Name      string
+}
+
+type Index struct {
+	Name    string
+	Columns []string
+	Unique  bool
+	Kind    string
+}
+
+type TableStructure struct {
+	Table       Table
+	ForeignKeys []ForeignKey
+	Indexes     []Index
 }
 
 type ForeignKey struct {
@@ -58,6 +79,37 @@ func (s Schema) Validate(namespace string) error {
 			return ErrInvalidSchema
 		}
 		if _, found := tables[foreignKey.ToTable]; !found {
+			return ErrInvalidSchema
+		}
+	}
+
+	return nil
+}
+
+// テーブル参照生成
+func NewTableRef(namespace, name string) (TableRef, error) {
+	if strings.TrimSpace(namespace) == "" || strings.TrimSpace(name) == "" {
+		return TableRef{}, ErrInvalidSchema
+	}
+
+	return TableRef{Namespace: namespace, Name: name}, nil
+}
+
+// テーブル構造検証
+func (s TableStructure) Validate(ref TableRef) error {
+	if s.Table.Namespace != ref.Namespace || s.Table.Name != ref.Name {
+		return ErrInvalidSchema
+	}
+	if err := validateColumns(s.Table.Columns); err != nil {
+		return err
+	}
+	for _, foreignKey := range s.ForeignKeys {
+		if foreignKey.Name == "" || foreignKey.FromTable != ref.Name || foreignKey.ToTable == "" || len(foreignKey.FromColumns) == 0 || len(foreignKey.FromColumns) != len(foreignKey.ToColumns) {
+			return ErrInvalidSchema
+		}
+	}
+	for _, index := range s.Indexes {
+		if index.Name == "" || index.Kind == "" || len(index.Columns) == 0 {
 			return ErrInvalidSchema
 		}
 	}

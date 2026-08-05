@@ -107,6 +107,11 @@ func (*appRepositoryStub) InspectSchema(context.Context, domain.Profile, string)
 	return domain.Schema{}, nil
 }
 
+// テーブル構造取得再現
+func (*appRepositoryStub) InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error) {
+	return domain.TableStructure{}, nil
+}
+
 // 接続プロファイル読込
 func TestAppUseCaseLoadProfiles(t *testing.T) {
 	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")

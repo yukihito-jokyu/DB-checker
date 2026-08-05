@@ -510,6 +510,150 @@ export namespace wails {
 		    return a;
 		}
 	}
+	export class TableStructureIndexResponse {
+	    name: string;
+	    columns: string[];
+	    unique: boolean;
+	    kind: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TableStructureIndexResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.columns = source["columns"];
+	        this.unique = source["unique"];
+	        this.kind = source["kind"];
+	    }
+	}
+	export class TableStructureColumnResponse {
+	    name: string;
+	    dataType: string;
+	    nullable: boolean;
+	    defaultValue?: string;
+	    isPrimaryKey: boolean;
+	    isForeignKey: boolean;
+	    isUnique: boolean;
+	    isGenerated: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new TableStructureColumnResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.dataType = source["dataType"];
+	        this.nullable = source["nullable"];
+	        this.defaultValue = source["defaultValue"];
+	        this.isPrimaryKey = source["isPrimaryKey"];
+	        this.isForeignKey = source["isForeignKey"];
+	        this.isUnique = source["isUnique"];
+	        this.isGenerated = source["isGenerated"];
+	    }
+	}
+	export class TableStructureTableResponse {
+	    namespace: string;
+	    name: string;
+	    columns: TableStructureColumnResponse[];
+
+	    static createFrom(source: any = {}) {
+	        return new TableStructureTableResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.columns = this.convertValues(source["columns"], TableStructureColumnResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TableStructureResponse {
+	    table: TableStructureTableResponse;
+	    foreignKeys: DatabaseForeignKeyResponse[];
+	    indexes: TableStructureIndexResponse[];
+
+	    static createFrom(source: any = {}) {
+	        return new TableStructureResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.table = this.convertValues(source["table"], TableStructureTableResponse);
+	        this.foreignKeys = this.convertValues(source["foreignKeys"], DatabaseForeignKeyResponse);
+	        this.indexes = this.convertValues(source["indexes"], TableStructureIndexResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStructureResponse_ {
+	    data?: TableStructureResponse;
+	    error?: ErrorResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStructureResponse_(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], TableStructureResponse);
+	        this.error = this.convertValues(source["error"], ErrorResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SaveConnectionProfileRequest {
 	    id: string;
 	    name: string;
@@ -586,6 +730,10 @@ export namespace wails {
 		    return a;
 		}
 	}
+
+
+
+
 
 
 
