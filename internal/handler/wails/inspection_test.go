@@ -31,6 +31,8 @@ type schemaRepositoryStub struct {
 	statistics      domain.TableStatistics
 	statisticsErr   error
 	statisticsFunc  func(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error)
+	rows            domain.TableRows
+	rowsErr         error
 	flowState       domain.FlowState
 	flowStateErr    error
 }
@@ -84,6 +86,11 @@ func (s *schemaRepositoryStub) InspectTableStatistics(ctx context.Context, profi
 	}
 
 	return s.statistics, s.statisticsErr
+}
+
+// テーブル行一覧再現
+func (s *schemaRepositoryStub) ListRows(context.Context, domain.Profile, string, domain.TableQuery) (domain.TableRows, error) {
+	return s.rows, s.rowsErr
 }
 
 // データベーススキーマ取得レスポンス検証
@@ -397,6 +404,113 @@ func TestAppHandlerGetTableStatisticsCancelsPreviousRequest(t *testing.T) {
 	if thirdResult.Data == nil || thirdResult.Data.Table != "third" || thirdResult.Error != nil {
 		t.Errorf("third GetTableStatistics() = %#v, want successful result after stale cleanup", thirdResult)
 	}
+}
+
+// テーブル行一覧レスポンス契約検証
+func TestAppHandlerListTableRows(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	structure := domain.TableStructure{
+		Table: domain.Table{
+			Namespace: "public",
+			Name:      "items",
+			Columns: []domain.Column{
+				{Name: "id", DataType: "int", IsPrimaryKey: true},
+				{Name: "payload", DataType: "json"},
+			},
+		},
+	}
+	baseRepository := schemaRepositoryStub{
+		profile:         profile,
+		activeID:        stringPointer(profile.ID),
+		credential:      "secret",
+		credentialFound: true,
+		structure:       structure,
+		rows: domain.TableRows{
+			Rows: []domain.TableRow{
+				{Cells: []domain.CellValue{
+					{Kind: domain.CellKindValue, Value: "1"},
+					{Kind: domain.CellKindValue, Value: `{"key":"value"}`},
+				}},
+			},
+			TotalCount: 1,
+			Page:       1,
+			PageSize:   domain.TablePageSize,
+		},
+	}
+	tests := []struct {
+		name     string
+		request  ListTableRowsRequest
+		wantCode apperr.Code
+		wantData bool
+	}{
+		{
+			name:     "行DTOを返す",
+			request:  ListTableRowsRequest{Table: "items", Page: 1},
+			wantData: true,
+		},
+		{
+			name: "空グループを入力不正として返す",
+			request: ListTableRowsRequest{
+				Table:  "items",
+				Page:   1,
+				Filter: &FilterGroupRequest{Operator: "and"},
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "JSONへのLIKEをフィルター適用失敗として返す",
+			request: ListTableRowsRequest{
+				Table: "items",
+				Page:  1,
+				Filter: &FilterGroupRequest{
+					Operator: "and",
+					Filters: []TableFilterRequest{{
+						Column:   "payload",
+						Operator: "LIKE",
+						Values:   []string{"%x%"},
+					}},
+				},
+			},
+			wantCode: apperr.CodeFilterApplyFailed,
+		},
+		{
+			name: "不正な並び替えを並び替え適用失敗として返す",
+			request: ListTableRowsRequest{
+				Table: "items",
+				Page:  1,
+				Sort:  &TableSortRequest{Column: "missing", Direction: "asc"},
+			},
+			wantCode: apperr.CodeSortApplyFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := baseRepository
+			handler := NewAppHandler(applogger.NewWithWriter(io.Discard, slog.LevelDebug), config.NewStore(t.TempDir()), usecase.NewAppUseCase(&repository))
+			got := handler.ListTableRows(tt.request)
+			if gotCode := tableRowsResponseErrorCode(got.Error); gotCode != tt.wantCode {
+				t.Errorf("ListTableRows() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if gotData := got.Data != nil; gotData != tt.wantData {
+				t.Fatalf("ListTableRows() data found = %v, want %v", gotData, tt.wantData)
+			}
+			if !tt.wantData {
+				return
+			}
+			if got.Data.TotalCount != 1 || len(got.Data.Rows) != 1 || got.Data.Rows[0].Cells[1].Value != `{"key":"value"}` {
+				t.Errorf("ListTableRows() data = %#v, want row DTO", got.Data)
+			}
+		})
+	}
+}
+
+// テーブル行一覧エラーコード取得
+func tableRowsResponseErrorCode(response *ErrorResponse) apperr.Code {
+	if response == nil {
+		return ""
+	}
+
+	return apperr.Code(response.Code)
 }
 
 // データベーススキーマレスポンス全項目検証

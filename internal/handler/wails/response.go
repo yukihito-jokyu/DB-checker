@@ -140,6 +140,48 @@ type TableStatisticsResponse struct {
 	ForeignKeys []ForeignKeyStatisticsResponse `json:"foreignKeys"`
 }
 
+type TableSortRequest struct {
+	Column    string `json:"column"`
+	Direction string `json:"direction"`
+}
+
+type TableFilterRequest struct {
+	Column   string   `json:"column"`
+	Operator string   `json:"operator"`
+	Values   []string `json:"values"`
+}
+
+type FilterGroupRequest struct {
+	Operator string               `json:"operator"`
+	Filters  []TableFilterRequest `json:"filters"`
+	Groups   []FilterGroupRequest `json:"groups"`
+}
+
+type ListTableRowsRequest struct {
+	Table  string              `json:"table"`
+	Page   int                 `json:"page"`
+	Sort   *TableSortRequest   `json:"sort"`
+	Filter *FilterGroupRequest `json:"filter"`
+}
+
+type TableCellResponse struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+}
+
+type TableRowResponse struct {
+	Cells []TableCellResponse `json:"cells"`
+}
+
+type TableRowsResponse struct {
+	Rows       []TableRowResponse  `json:"rows"`
+	TotalCount int64               `json:"totalCount"`
+	Page       int                 `json:"page"`
+	PageSize   int                 `json:"pageSize"`
+	Sort       *TableSortRequest   `json:"sort"`
+	Filter     *FilterGroupRequest `json:"filter"`
+}
+
 type DatabaseTableResponse struct {
 	Namespace string                   `json:"namespace"`
 	Name      string                   `json:"name"`
