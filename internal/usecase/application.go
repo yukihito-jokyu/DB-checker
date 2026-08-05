@@ -19,6 +19,7 @@ type AppRepository interface {
 	InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error)
 	InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error)
 	InspectTableStatistics(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error)
+	ListRows(context.Context, domain.Profile, string, domain.TableQuery) (domain.TableRows, error)
 }
 
 // アプリケーションユースケース
