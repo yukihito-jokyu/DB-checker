@@ -9,6 +9,90 @@ import (
 
 var ErrInvalidSchema = errors.New("invalid schema")
 
+var ErrInvalidTableQuery = errors.New("invalid table query")
+
+var ErrInvalidTableFilter = errors.New("invalid table filter")
+
+const TablePageSize = 100
+
+type SortDirection string
+
+const (
+	SortDirectionAscending  SortDirection = "asc"
+	SortDirectionDescending SortDirection = "desc"
+)
+
+type FilterOperator string
+
+const (
+	FilterOperatorEqual     FilterOperator = "="
+	FilterOperatorNotEqual  FilterOperator = "!="
+	FilterOperatorGreater   FilterOperator = ">"
+	FilterOperatorGreaterEq FilterOperator = ">="
+	FilterOperatorLess      FilterOperator = "<"
+	FilterOperatorLessEq    FilterOperator = "<="
+	FilterOperatorLike      FilterOperator = "LIKE"
+	FilterOperatorIn        FilterOperator = "IN"
+	FilterOperatorBetween   FilterOperator = "BETWEEN"
+	FilterOperatorIsNull    FilterOperator = "IS NULL"
+	FilterOperatorIsNotNull FilterOperator = "IS NOT NULL"
+)
+
+type FilterGroupOperator string
+
+const (
+	FilterGroupOperatorAnd FilterGroupOperator = "and"
+	FilterGroupOperatorOr  FilterGroupOperator = "or"
+)
+
+type TableSort struct {
+	Column    string
+	Direction SortDirection
+}
+
+type TableFilter struct {
+	Column   string
+	Operator FilterOperator
+	Values   []string
+}
+
+type FilterGroup struct {
+	Operator FilterGroupOperator
+	Filters  []TableFilter
+	Groups   []FilterGroup
+}
+
+type TableQuery struct {
+	Table   TableRef
+	Page    int
+	Sort    *TableSort
+	Filter  *FilterGroup
+	Columns []Column
+}
+
+type CellKind string
+
+const (
+	CellKindNull  CellKind = "null"
+	CellKindValue CellKind = "value"
+)
+
+type CellValue struct {
+	Kind  CellKind
+	Value string
+}
+
+type TableRow struct{ Cells []CellValue }
+
+type TableRows struct {
+	Rows       []TableRow
+	TotalCount int64
+	Page       int
+	PageSize   int
+	Sort       *TableSort
+	Filter     *FilterGroup
+}
+
 type Table struct {
 	Namespace string
 	Name      string
@@ -144,6 +228,130 @@ func NewTableRef(namespace, name string) (TableRef, error) {
 	}
 
 	return TableRef{Namespace: namespace, Name: name}, nil
+}
+
+// テーブル問い合わせ検証
+func (q TableQuery) Validate() error {
+	if _, err := NewTableRef(q.Table.Namespace, q.Table.Name); err != nil || q.Page < 1 || len(q.Columns) == 0 {
+		return ErrInvalidTableQuery
+	}
+
+	columns := make(map[string]Column, len(q.Columns))
+	for _, column := range q.Columns {
+		if column.Name == "" || column.DataType == "" {
+			return ErrInvalidTableQuery
+		}
+		columns[column.Name] = column
+	}
+	if q.Sort != nil {
+		if _, found := columns[q.Sort.Column]; !found || (q.Sort.Direction != SortDirectionAscending && q.Sort.Direction != SortDirectionDescending) {
+			return ErrInvalidTableQuery
+		}
+	}
+	if q.Filter != nil {
+		if err := validateFilterGroup(*q.Filter, columns, 1, new(int)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// フィルターグループ検証
+func validateFilterGroup(group FilterGroup, columns map[string]Column, depth int, count *int) error {
+	if depth > 3 || (group.Operator != FilterGroupOperatorAnd && group.Operator != FilterGroupOperatorOr) || (len(group.Filters) == 0 && len(group.Groups) == 0) {
+		return ErrInvalidTableQuery
+	}
+	for _, filter := range group.Filters {
+		*count++
+		if *count > 20 {
+			return ErrInvalidTableQuery
+		}
+		if err := validateTableFilter(filter, columns); err != nil {
+			return err
+		}
+	}
+	for _, child := range group.Groups {
+		if err := validateFilterGroup(child, columns, depth+1, count); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// テーブルフィルター検証
+func validateTableFilter(filter TableFilter, columns map[string]Column) error {
+	column, found := columns[filter.Column]
+	if !found {
+		return ErrInvalidTableFilter
+	}
+	values := len(filter.Values)
+	switch filter.Operator {
+	case FilterOperatorIsNull, FilterOperatorIsNotNull:
+		if values != 0 {
+			return ErrInvalidTableQuery
+		}
+
+		return nil
+	case FilterOperatorIn:
+		if values < 1 || values > 100 {
+			return ErrInvalidTableQuery
+		}
+	case FilterOperatorBetween:
+		if values != 2 {
+			return ErrInvalidTableQuery
+		}
+	case FilterOperatorEqual, FilterOperatorNotEqual, FilterOperatorGreater, FilterOperatorGreaterEq, FilterOperatorLess, FilterOperatorLessEq, FilterOperatorLike:
+		if values != 1 {
+			return ErrInvalidTableQuery
+		}
+	default:
+		return ErrInvalidTableFilter
+	}
+
+	if !filterOperatorAllowed(column.DataType, filter.Operator) {
+		return ErrInvalidTableFilter
+	}
+
+	return nil
+}
+
+// フィルター演算子適用可否
+func filterOperatorAllowed(dataType string, operator FilterOperator) bool {
+	if isBinaryOrJSONColumn(dataType) {
+		return operator == FilterOperatorEqual || operator == FilterOperatorNotEqual || operator == FilterOperatorIn
+	}
+	if isTextColumn(dataType) {
+		return operator == FilterOperatorEqual || operator == FilterOperatorNotEqual || operator == FilterOperatorLike || operator == FilterOperatorIn
+	}
+	if isOrderedColumn(dataType) {
+		return operator == FilterOperatorEqual || operator == FilterOperatorNotEqual || operator == FilterOperatorGreater || operator == FilterOperatorGreaterEq || operator == FilterOperatorLess || operator == FilterOperatorLessEq || operator == FilterOperatorIn || operator == FilterOperatorBetween
+	}
+
+	return operator == FilterOperatorEqual || operator == FilterOperatorNotEqual || operator == FilterOperatorIn
+}
+
+// 文字列型判定
+//
+//nolint:nlreturn // 単一の判定結果を返す。
+func isTextColumn(dataType string) bool {
+	value := strings.ToLower(dataType)
+	return strings.Contains(value, "char") || strings.Contains(value, "text") || strings.Contains(value, "varchar") || strings.Contains(value, "enum")
+}
+
+// 順序比較可能型判定
+func isOrderedColumn(dataType string) bool {
+	value := strings.ToLower(dataType)
+
+	return strings.Contains(value, "int") || strings.Contains(value, "decimal") || strings.Contains(value, "numeric") || strings.Contains(value, "real") || strings.Contains(value, "float") || strings.Contains(value, "double") || strings.Contains(value, "date") || strings.Contains(value, "time")
+}
+
+// バイナリー・JSON型判定
+func isBinaryOrJSONColumn(dataType string) bool {
+	value := strings.ToLower(dataType)
+
+	return strings.Contains(value, "blob") || strings.Contains(value, "binary") || strings.Contains(value, "bytea") || strings.Contains(value, "json")
 }
 
 // テーブル構造検証
