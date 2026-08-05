@@ -1,6 +1,48 @@
 package domain
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+// 有効カラム
+func validColumns() []Column {
+	return []Column{
+		{
+			Name:     "id",
+			DataType: "int4",
+		},
+	}
+}
+
+// 有効なテーブル問い合わせ
+func validTableQuery() TableQuery {
+	return TableQuery{
+		Table: TableRef{
+			Namespace: "public",
+			Name:      "users",
+		},
+		Page: 1,
+		Columns: []Column{
+			{
+				Name:     "name",
+				DataType: "varchar",
+			},
+			{
+				Name:     "age",
+				DataType: "int",
+			},
+			{
+				Name:     "payload",
+				DataType: "json",
+			},
+			{
+				Name:     "enabled",
+				DataType: "bool",
+			},
+		},
+	}
+}
 
 // テーブル参照生成検証
 func TestNewTableRef(t *testing.T) {
@@ -10,8 +52,23 @@ func TestNewTableRef(t *testing.T) {
 		table     string
 		wantErr   bool
 	}{
-		{name: "有効な参照を返す", namespace: "public", table: "items"},
-		{name: "空白テーブル名を拒否する", namespace: "public", table: " ", wantErr: true},
+		{
+			name:      "有効な参照を返す",
+			namespace: "public",
+			table:     "items",
+		},
+		{
+			name:      "空白namespaceを拒否する",
+			namespace: " ",
+			table:     "items",
+			wantErr:   true,
+		},
+		{
+			name:      "空白テーブル名を拒否する",
+			namespace: "public",
+			table:     " ",
+			wantErr:   true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -22,8 +79,731 @@ func TestNewTableRef(t *testing.T) {
 			if tt.wantErr {
 				return
 			}
-			if got.Namespace != tt.namespace || got.Name != tt.table {
-				t.Errorf("NewTableRef() = %#v, want namespace=%q name=%q", got, tt.namespace, tt.table)
+			if got.Namespace != tt.namespace {
+				t.Errorf("Namespace = %q, want %q", got.Namespace, tt.namespace)
+			}
+			if got.Name != tt.table {
+				t.Errorf("Name = %q, want %q", got.Name, tt.table)
+			}
+		})
+	}
+}
+
+// スキーマ検証
+func TestSchemaValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   Schema
+		wantErr error
+	}{
+		{
+			name: "外部キーを含むスキーマを受け入れる",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+					{
+						Namespace: "public",
+						Name:      "orders",
+						Columns:   validColumns(),
+					},
+				},
+				ForeignKeys: []ForeignKey{
+					{
+						Name:        "orders_user_id_fkey",
+						FromTable:   "orders",
+						FromColumns: []string{"user_id"},
+						ToTable:     "users",
+						ToColumns:   []string{"id"},
+					},
+				},
+			},
+		},
+		{
+			name: "異なるnamespaceを拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "other",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "空テーブル名を拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Columns:   validColumns(),
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "重複テーブル名を拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "不正カラムを拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns: []Column{
+							{
+								DataType: "int4",
+							},
+						},
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "不正な外部キー定義を拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+				},
+				ForeignKeys: []ForeignKey{
+					{
+						FromTable:   "users",
+						FromColumns: []string{"user_id"},
+						ToTable:     "users",
+						ToColumns:   []string{"id"},
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "存在しない参照元テーブルを拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+				},
+				ForeignKeys: []ForeignKey{
+					{
+						Name:        "orders_user_id_fkey",
+						FromTable:   "orders",
+						FromColumns: []string{"user_id"},
+						ToTable:     "users",
+						ToColumns:   []string{"id"},
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "存在しない参照先テーブルを拒否する",
+			value: Schema{
+				Tables: []Table{
+					{
+						Namespace: "public",
+						Name:      "orders",
+						Columns:   validColumns(),
+					},
+					{
+						Namespace: "public",
+						Name:      "users",
+						Columns:   validColumns(),
+					},
+				},
+				ForeignKeys: []ForeignKey{
+					{
+						Name:        "orders_user_id_fkey",
+						FromTable:   "orders",
+						FromColumns: []string{"user_id"},
+						ToTable:     "accounts",
+						ToColumns:   []string{"id"},
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.value.Validate("public")
+			if gotErr := err != nil; gotErr != (tt.wantErr != nil) {
+				t.Fatalf("Validate() error = %v, want error %v", err, tt.wantErr != nil)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Validate() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// テーブル問い合わせ検証
+func TestTableQueryValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   TableQuery
+		wantErr error
+	}{
+		{
+			name:  "基本問い合わせを受け入れる",
+			query: validTableQuery(),
+		},
+		{
+			name: "有効なフィルターを受け入れる",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page: 1,
+				Columns: []Column{
+					{
+						Name:     "age",
+						DataType: "int",
+					},
+				},
+				Filter: &FilterGroup{
+					Operator: FilterGroupOperatorAnd,
+					Filters: []TableFilter{
+						{
+							Column:   "age",
+							Operator: FilterOperatorGreater,
+							Values:   []string{"20"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "不正なフィルターを拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page: 1,
+				Columns: []Column{
+					{
+						Name:     "age",
+						DataType: "int",
+					},
+				},
+				Filter: &FilterGroup{
+					Operator: FilterGroupOperatorAnd,
+					Filters: []TableFilter{
+						{
+							Column:   "age",
+							Operator: FilterOperatorLike,
+							Values:   []string{"2%"},
+						},
+					},
+				},
+			},
+			wantErr: ErrInvalidTableFilter,
+		},
+		{
+			name: "空白namespaceを拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: " ",
+					Name:      "users",
+				},
+				Page:    1,
+				Columns: validColumns(),
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "不正ページを拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Columns: validColumns(),
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "空カラムを拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page: 1,
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "不正カラム定義を拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page: 1,
+				Columns: []Column{
+					{
+						Name: "id",
+					},
+				},
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "有効な並び替えを受け入れる",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page:    1,
+				Columns: validColumns(),
+				Sort: &TableSort{
+					Column:    "id",
+					Direction: SortDirectionAscending,
+				},
+			},
+		},
+		{
+			name: "存在しない並び替え列を拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page:    1,
+				Columns: validColumns(),
+				Sort: &TableSort{
+					Column:    "unknown",
+					Direction: SortDirectionAscending,
+				},
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "不正な並び替え方向を拒否する",
+			query: TableQuery{
+				Table: TableRef{
+					Namespace: "public",
+					Name:      "users",
+				},
+				Page:    1,
+				Columns: validColumns(),
+				Sort: &TableSort{
+					Column:    "id",
+					Direction: "sideways",
+				},
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.query.Validate()
+			if gotErr := err != nil; gotErr != (tt.wantErr != nil) {
+				t.Fatalf("Validate() error = %v, want error %v", err, tt.wantErr != nil)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Validate() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// フィルターグループ検証
+func TestValidateFilterGroup(t *testing.T) {
+	columns := map[string]Column{
+		"id": {
+			Name:     "id",
+			DataType: "int",
+		},
+	}
+	tooManyFilters := make([]TableFilter, 21)
+	for i := range tooManyFilters {
+		tooManyFilters[i] = TableFilter{
+			Column:   "id",
+			Operator: FilterOperatorEqual,
+			Values:   []string{"1"},
+		}
+	}
+	tests := []struct {
+		name    string
+		group   FilterGroup
+		depth   int
+		wantErr error
+	}{
+		{
+			name: "フィルターを受け入れる",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorAnd,
+				Filters: []TableFilter{
+					{
+						Column:   "id",
+						Operator: FilterOperatorEqual,
+						Values:   []string{"1"},
+					},
+				},
+			},
+			depth: 1,
+		},
+		{
+			name: "子グループを再帰して受け入れる",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorOr,
+				Groups: []FilterGroup{
+					{
+						Operator: FilterGroupOperatorAnd,
+						Filters: []TableFilter{
+							{
+								Column:   "id",
+								Operator: FilterOperatorGreater,
+								Values:   []string{"1"},
+							},
+						},
+					},
+				},
+			},
+			depth: 1,
+		},
+		{
+			name: "深さ超過を拒否する",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorAnd,
+				Filters: []TableFilter{
+					{
+						Column:   "id",
+						Operator: FilterOperatorEqual,
+						Values:   []string{"1"},
+					},
+				},
+			},
+			depth:   4,
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "不正グループ演算子を拒否する",
+			group: FilterGroup{
+				Operator: "xor",
+				Filters: []TableFilter{
+					{
+						Column:   "id",
+						Operator: FilterOperatorEqual,
+						Values:   []string{"1"},
+					},
+				},
+			},
+			depth:   1,
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "空グループを拒否する",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorAnd,
+			},
+			depth:   1,
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "21件のフィルターを拒否する",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorAnd,
+				Filters:  tooManyFilters,
+			},
+			depth:   1,
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "不正フィルターを拒否する",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorAnd,
+				Filters: []TableFilter{
+					{
+						Column:   "unknown",
+						Operator: FilterOperatorEqual,
+						Values:   []string{"1"},
+					},
+				},
+			},
+			depth:   1,
+			wantErr: ErrInvalidTableFilter,
+		},
+		{
+			name: "不正な子グループを拒否する",
+			group: FilterGroup{
+				Operator: FilterGroupOperatorAnd,
+				Groups: []FilterGroup{
+					{
+						Operator: "xor",
+						Filters: []TableFilter{
+							{
+								Column:   "id",
+								Operator: FilterOperatorEqual,
+								Values:   []string{"1"},
+							},
+						},
+					},
+				},
+			},
+			depth:   1,
+			wantErr: ErrInvalidTableQuery,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			count := 0
+			err := validateFilterGroup(tt.group, columns, tt.depth, &count)
+			if gotErr := err != nil; gotErr != (tt.wantErr != nil) {
+				t.Fatalf("validateFilterGroup() error = %v, want error %v", err, tt.wantErr != nil)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("validateFilterGroup() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// テーブルフィルター検証
+func TestValidateTableFilter(t *testing.T) {
+	columns := map[string]Column{
+		"name": {
+			Name:     "name",
+			DataType: "varchar",
+		},
+		"age": {
+			Name:     "age",
+			DataType: "int",
+		},
+		"payload": {
+			Name:     "payload",
+			DataType: "json",
+		},
+		"enabled": {
+			Name:     "enabled",
+			DataType: "bool",
+		},
+	}
+	tests := []struct {
+		name    string
+		filter  TableFilter
+		wantErr error
+	}{
+		{
+			name: "NULL判定を受け入れる",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorIsNull,
+			},
+		},
+		{
+			name: "NOT NULL判定を受け入れる",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorIsNotNull,
+			},
+		},
+		{
+			name: "NULL判定の値を拒否する",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorIsNull,
+				Values:   []string{"x"},
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "INを受け入れる",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorIn,
+				Values: []string{
+					"a",
+					"b",
+				},
+			},
+		},
+		{
+			name: "空INを拒否する",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorIn,
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "101件のINを拒否する",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorIn,
+				Values:   make([]string, 101),
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "BETWEENを受け入れる",
+			filter: TableFilter{
+				Column:   "age",
+				Operator: FilterOperatorBetween,
+				Values: []string{
+					"1",
+					"2",
+				},
+			},
+		},
+		{
+			name: "値不足のBETWEENを拒否する",
+			filter: TableFilter{
+				Column:   "age",
+				Operator: FilterOperatorBetween,
+				Values:   []string{"1"},
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "比較演算子を受け入れる",
+			filter: TableFilter{
+				Column:   "age",
+				Operator: FilterOperatorGreater,
+				Values:   []string{"1"},
+			},
+		},
+		{
+			name: "比較演算子の値不足を拒否する",
+			filter: TableFilter{
+				Column:   "age",
+				Operator: FilterOperatorGreater,
+			},
+			wantErr: ErrInvalidTableQuery,
+		},
+		{
+			name: "不正演算子を拒否する",
+			filter: TableFilter{
+				Column:   "age",
+				Operator: "REGEXP",
+				Values:   []string{"1"},
+			},
+			wantErr: ErrInvalidTableFilter,
+		},
+		{
+			name: "テキストのBETWEENを拒否する",
+			filter: TableFilter{
+				Column:   "name",
+				Operator: FilterOperatorBetween,
+				Values: []string{
+					"a",
+					"z",
+				},
+			},
+			wantErr: ErrInvalidTableFilter,
+		},
+		{
+			name: "JSONのLIKEを拒否する",
+			filter: TableFilter{
+				Column:   "payload",
+				Operator: FilterOperatorLike,
+				Values:   []string{"%a%"},
+			},
+			wantErr: ErrInvalidTableFilter,
+		},
+		{
+			name: "真偽値の範囲比較を拒否する",
+			filter: TableFilter{
+				Column:   "enabled",
+				Operator: FilterOperatorGreater,
+				Values:   []string{"true"},
+			},
+			wantErr: ErrInvalidTableFilter,
+		},
+		{
+			name: "存在しない列を拒否する",
+			filter: TableFilter{
+				Column:   "unknown",
+				Operator: FilterOperatorEqual,
+				Values:   []string{"x"},
+			},
+			wantErr: ErrInvalidTableFilter,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTableFilter(tt.filter, columns)
+			if gotErr := err != nil; gotErr != (tt.wantErr != nil) {
+				t.Fatalf("validateTableFilter() error = %v, want error %v", err, tt.wantErr != nil)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("validateTableFilter() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// フィルター演算子適用可否検証
+func TestFilterOperatorAllowed(t *testing.T) {
+	tests := []struct {
+		name     string
+		dataType string
+		operator FilterOperator
+		want     bool
+	}{
+		{
+			name:     "バイナリーの一致を許可する",
+			dataType: "bytea",
+			operator: FilterOperatorEqual,
+			want:     true,
+		},
+		{
+			name:     "テキストのLIKEを許可する",
+			dataType: "varchar",
+			operator: FilterOperatorLike,
+			want:     true,
+		},
+		{
+			name:     "数値の範囲比較を許可する",
+			dataType: "int",
+			operator: FilterOperatorLessEq,
+			want:     true,
+		},
+		{
+			name:     "真偽値のINを許可する",
+			dataType: "bool",
+			operator: FilterOperatorIn,
+			want:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := filterOperatorAllowed(tt.dataType, tt.operator); got != tt.want {
+				t.Errorf("filterOperatorAllowed() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -31,32 +811,184 @@ func TestNewTableRef(t *testing.T) {
 
 // テーブル構造検証
 func TestTableStructureValidate(t *testing.T) {
-	ref, err := NewTableRef("public", "items")
-	if err != nil {
-		t.Fatalf("NewTableRef() error = %v", err)
+	ref := TableRef{
+		Namespace: "public",
+		Name:      "orders",
 	}
 	tests := []struct {
 		name    string
 		value   TableStructure
-		wantErr bool
+		wantErr error
 	}{
 		{
-			name: "詳細属性を含む構造を受け入れる",
+			name: "外部キーとインデックスを含む構造を受け入れる",
 			value: TableStructure{
-				Table:   Table{Namespace: "public", Name: "items", Columns: []Column{{Name: "id", DataType: "int4"}}},
-				Indexes: []Index{{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"}},
+				Table: Table{
+					Namespace: "public",
+					Name:      "orders",
+					Columns:   validColumns(),
+				},
+				ForeignKeys: []ForeignKey{
+					{
+						Name:        "orders_user_id_fkey",
+						FromTable:   "orders",
+						FromColumns: []string{"user_id"},
+						ToTable:     "users",
+						ToColumns:   []string{"id"},
+					},
+				},
+				Indexes: []Index{
+					{
+						Name:    "orders_pkey",
+						Columns: []string{"id"},
+						Unique:  true,
+						Kind:    "btree",
+					},
+				},
 			},
 		},
 		{
-			name:    "異なるテーブルを拒否する",
-			value:   TableStructure{Table: Table{Namespace: "public", Name: "other", Columns: []Column{{Name: "id", DataType: "int4"}}}},
-			wantErr: true,
+			name: "異なるテーブルを拒否する",
+			value: TableStructure{
+				Table: Table{
+					Namespace: "public",
+					Name:      "users",
+					Columns:   validColumns(),
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "不正カラムを拒否する",
+			value: TableStructure{
+				Table: Table{
+					Namespace: "public",
+					Name:      "orders",
+					Columns: []Column{
+						{
+							Name: "id",
+						},
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "不正外部キーを拒否する",
+			value: TableStructure{
+				Table: Table{
+					Namespace: "public",
+					Name:      "orders",
+					Columns:   validColumns(),
+				},
+				ForeignKeys: []ForeignKey{
+					{
+						Name:        "orders_user_id_fkey",
+						FromTable:   "users",
+						FromColumns: []string{"user_id"},
+						ToTable:     "users",
+						ToColumns:   []string{"id"},
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "不正インデックスを拒否する",
+			value: TableStructure{
+				Table: Table{
+					Namespace: "public",
+					Name:      "orders",
+					Columns:   validColumns(),
+				},
+				Indexes: []Index{
+					{
+						Columns: []string{"id"},
+						Kind:    "btree",
+					},
+				},
+			},
+			wantErr: ErrInvalidSchema,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotErr := tt.value.Validate(ref) != nil; gotErr != tt.wantErr {
-				t.Errorf("Validate() error = %v, want error %v", gotErr, tt.wantErr)
+			err := tt.value.Validate(ref)
+			if gotErr := err != nil; gotErr != (tt.wantErr != nil) {
+				t.Fatalf("Validate() error = %v, want error %v", err, tt.wantErr != nil)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Validate() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// カラム検証
+func TestValidateColumns(t *testing.T) {
+	tests := []struct {
+		name    string
+		columns []Column
+		wantErr error
+	}{
+		{
+			name:    "空カラム一覧を受け入れる",
+			columns: nil,
+		},
+		{
+			name: "複数カラムを受け入れる",
+			columns: []Column{
+				{
+					Name:     "id",
+					DataType: "int",
+				},
+				{
+					Name:     "name",
+					DataType: "varchar",
+				},
+			},
+		},
+		{
+			name: "空カラム名を拒否する",
+			columns: []Column{
+				{
+					DataType: "int",
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "空データ型を拒否する",
+			columns: []Column{
+				{
+					Name: "id",
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+		{
+			name: "重複カラム名を拒否する",
+			columns: []Column{
+				{
+					Name:     "id",
+					DataType: "int",
+				},
+				{
+					Name:     "id",
+					DataType: "int",
+				},
+			},
+			wantErr: ErrInvalidSchema,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateColumns(tt.columns)
+			if gotErr := err != nil; gotErr != (tt.wantErr != nil) {
+				t.Fatalf("validateColumns() error = %v, want error %v", err, tt.wantErr != nil)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("validateColumns() error = %v, want %v", err, tt.wantErr)
 			}
 		})
 	}

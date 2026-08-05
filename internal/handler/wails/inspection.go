@@ -75,6 +75,26 @@ func (h *AppHandler) GetTableStatistics(table string) Response[TableStatisticsRe
 	return OK(toTableStatisticsResponse(statistics))
 }
 
+// テーブル行一覧取得
+func (h *AppHandler) ListTableRows(request ListTableRowsRequest) Response[TableRowsResponse] {
+	h.logger.Debug(context.Background(), "table rows requested", slog.String("operation", "table_rows_list"))
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeDataLoadFailed)
+		h.logFailureWithCode("table rows list failed", "table_rows_list", err)
+
+		return Fail[TableRowsResponse](err)
+	}
+	query := domain.TableQuery{Table: domain.TableRef{Name: request.Table}, Page: request.Page, Sort: toTableSort(request.Sort), Filter: toFilterGroup(request.Filter)}
+	rows, err := h.appUseCase.ListTableRows(context.Background(), query)
+	if err != nil {
+		h.logFailureWithCode("table rows list failed", "table_rows_list", err)
+
+		return Fail[TableRowsResponse](err)
+	}
+
+	return OK(toTableRowsResponse(rows))
+}
+
 // 統計要求開始
 func (h *AppHandler) beginTableStatistics() (context.Context, context.CancelFunc, uint64) {
 	h.statisticsMu.Lock()
@@ -189,4 +209,77 @@ func toStatisticCountResponse(statistic domain.StatisticCount) StatisticCountRes
 // 値統計レスポンス変換
 func toStatisticValueResponse(statistic domain.StatisticValue) StatisticValueResponse {
 	return StatisticValueResponse{Value: statistic.Value, Status: string(statistic.Status), Reason: statistic.Reason}
+}
+
+// 並び替え変換
+//
+//nolint:nlreturn // nilと変換結果を返すだけの変換関数。
+func toTableSort(request *TableSortRequest) *domain.TableSort {
+	if request == nil {
+		return nil
+	}
+	return &domain.TableSort{Column: request.Column, Direction: domain.SortDirection(request.Direction)}
+}
+
+// フィルター変換
+//
+//nolint:nlreturn // 再帰的な変換を連続して扱う。
+func toFilterGroup(request *FilterGroupRequest) *domain.FilterGroup {
+	if request == nil {
+		return nil
+	}
+	filters := make([]domain.TableFilter, 0, len(request.Filters))
+	for _, filter := range request.Filters {
+		filters = append(filters, domain.TableFilter{Column: filter.Column, Operator: domain.FilterOperator(filter.Operator), Values: filter.Values})
+	}
+	groups := make([]domain.FilterGroup, 0, len(request.Groups))
+	for _, child := range request.Groups {
+		if group := toFilterGroup(&child); group != nil {
+			groups = append(groups, *group)
+		}
+	}
+	return &domain.FilterGroup{Operator: domain.FilterGroupOperator(request.Operator), Filters: filters, Groups: groups}
+}
+
+// テーブル行レスポンス変換
+//
+//nolint:nlreturn // 行とセルを連続して変換する。
+func toTableRowsResponse(rows domain.TableRows) TableRowsResponse {
+	result := TableRowsResponse{Rows: make([]TableRowResponse, 0, len(rows.Rows)), TotalCount: rows.TotalCount, Page: rows.Page, PageSize: rows.PageSize, Sort: toTableSortResponse(rows.Sort), Filter: toFilterGroupResponse(rows.Filter)}
+	for _, row := range rows.Rows {
+		cells := make([]TableCellResponse, 0, len(row.Cells))
+		for _, cell := range row.Cells {
+			cells = append(cells, TableCellResponse{Kind: string(cell.Kind), Value: cell.Value})
+		}
+		result.Rows = append(result.Rows, TableRowResponse{Cells: cells})
+	}
+	return result
+}
+
+// 並び替えレスポンス変換
+//
+//nolint:nlreturn // nilと変換結果を返すだけの変換関数。
+func toTableSortResponse(sort *domain.TableSort) *TableSortRequest {
+	if sort == nil {
+		return nil
+	}
+	return &TableSortRequest{Column: sort.Column, Direction: string(sort.Direction)}
+}
+
+// フィルターレスポンス変換
+//
+//nolint:nlreturn // 再帰的な変換を連続して扱う。
+func toFilterGroupResponse(group *domain.FilterGroup) *FilterGroupRequest {
+	if group == nil {
+		return nil
+	}
+	filters := make([]TableFilterRequest, 0, len(group.Filters))
+	for _, filter := range group.Filters {
+		filters = append(filters, TableFilterRequest{Column: filter.Column, Operator: string(filter.Operator), Values: filter.Values})
+	}
+	groups := make([]FilterGroupRequest, 0, len(group.Groups))
+	for index := range group.Groups {
+		groups = append(groups, *toFilterGroupResponse(&group.Groups[index]))
+	}
+	return &FilterGroupRequest{Operator: string(group.Operator), Filters: filters, Groups: groups}
 }

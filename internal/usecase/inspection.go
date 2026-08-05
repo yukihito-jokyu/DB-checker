@@ -125,6 +125,74 @@ func (u *AppUseCase) GetTableStatistics(ctx context.Context, table string) (doma
 	return statistics, nil
 }
 
+// テーブル行一覧取得
+func (u *AppUseCase) ListTableRows(ctx context.Context, query domain.TableQuery) (domain.TableRows, error) {
+	profiles, activeID, err := u.repository.LoadProfiles()
+	if err != nil {
+		return domain.TableRows{}, err
+	}
+
+	if activeID == nil {
+		return domain.TableRows{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile, found := findProfile(profiles, *activeID)
+	if !found {
+		return domain.TableRows{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	ref, err := domain.NewTableRef(schemaNamespace(profile), query.Table.Name)
+	if err != nil || query.Page < 1 {
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeValidationFailed, domain.ErrInvalidTableQuery)
+	}
+
+	credential, found, err := u.repository.GetCredential(profile.ID)
+	if err != nil {
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+
+	if !found {
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeCredentialUnavailable, errors.New("credential not found"))
+	}
+
+	structure, err := u.repository.InspectTableStructure(ctx, profile, credential, ref)
+	if err != nil {
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeDataLoadFailed, err)
+	}
+
+	query.Table = ref
+	query.Columns = structure.Table.Columns
+	if query.Sort != nil && (!tableQueryHasColumn(query.Columns, query.Sort.Column) || (query.Sort.Direction != domain.SortDirectionAscending && query.Sort.Direction != domain.SortDirectionDescending)) {
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeSortApplyFailed, domain.ErrInvalidTableQuery)
+	}
+
+	if err := query.Validate(); err != nil {
+		if errors.Is(err, domain.ErrInvalidTableFilter) {
+			return domain.TableRows{}, apperr.Wrap(apperr.CodeFilterApplyFailed, err)
+		}
+
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	rows, err := u.repository.ListRows(ctx, profile, credential, query)
+	if err != nil {
+		return domain.TableRows{}, apperr.Wrap(apperr.CodeDataLoadFailed, err)
+	}
+
+	return rows, nil
+}
+
+// 問い合わせ列存在判定
+func tableQueryHasColumn(columns []domain.Column, name string) bool {
+	for _, column := range columns {
+		if column.Name == name {
+			return true
+		}
+	}
+
+	return false
+}
+
 // 対象名前空間取得
 func schemaNamespace(profile domain.Profile) string {
 	if profile.DBType == domain.DBTypeMySQL {

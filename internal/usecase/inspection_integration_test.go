@@ -5,6 +5,7 @@ package usecase
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -150,6 +151,79 @@ func TestAppUseCaseGetTableStatisticsIntegration(t *testing.T) {
 	}
 }
 
+// テーブル行一覧結合検証
+func TestAppUseCaseListTableRowsIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			database := integrationDatabase(t, target)
+			defer database.Close()
+			adminDatabase := integrationAdminDatabase(t, target)
+			if adminDatabase != nil {
+				defer adminDatabase.Close()
+			}
+			defer integrationSchemaCleanup(t, database, adminDatabase, target.Kind)
+			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
+			integrationStatisticsSeed(t, database, target.Kind)
+
+			appRepository, _, _ := integrationInspectionRepository(t, target)
+			useCase := NewAppUseCase(appRepository)
+			tests := []struct {
+				name        string
+				query       domain.TableQuery
+				wantCount   int64
+				wantRows    int
+				wantCode    apperr.Code
+				verifyTypes bool
+			}{
+				{name: "主キーの降順を返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_child"}, Page: 1, Sort: &domain.TableSort{Column: "id", Direction: domain.SortDirectionDescending}}, wantCount: 3, wantRows: 3},
+				{name: "ANDフィルターを返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_child"}, Page: 1, Filter: &domain.FilterGroup{Operator: domain.FilterGroupOperatorAnd, Filters: []domain.TableFilter{{Column: "status", Operator: domain.FilterOperatorEqual, Values: []string{"open"}}, {Column: "id", Operator: domain.FilterOperatorGreater, Values: []string{"1"}}}}}, wantCount: 1, wantRows: 1},
+				{name: "ORフィルターを返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_child"}, Page: 1, Filter: &domain.FilterGroup{Operator: domain.FilterGroupOperatorOr, Filters: []domain.TableFilter{{Column: "status", Operator: domain.FilterOperatorEqual, Values: []string{"closed"}}, {Column: "note", Operator: domain.FilterOperatorIsNull}}}}, wantCount: 2, wantRows: 2},
+				{name: "主キーなしの100件ページを返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 1}, wantCount: 101, wantRows: 100},
+				{name: "NULLとJSONとバイナリーと日時を返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 1, Sort: &domain.TableSort{Column: "id", Direction: domain.SortDirectionAscending}}, wantCount: 101, wantRows: 100, verifyTypes: true},
+				{name: "最終ページ超過に空行を返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 3, Sort: &domain.TableSort{Column: "id", Direction: domain.SortDirectionAscending}}, wantCount: 101, wantRows: 0},
+				{name: "JSONのLIKEを適用失敗として返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 1, Filter: &domain.FilterGroup{Operator: domain.FilterGroupOperatorAnd, Filters: []domain.TableFilter{{Column: "metadata", Operator: domain.FilterOperatorLike, Values: []string{"%key%"}}}}}, wantCode: apperr.CodeFilterApplyFailed},
+			}
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					rows, err := useCase.ListTableRows(context.Background(), tt.query)
+					if tt.wantCode != "" {
+						if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+							t.Errorf("ListTableRows() error code = %q, want %q", gotCode, tt.wantCode)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatalf("ListTableRows() error = %v", err)
+					}
+					if rows.TotalCount != tt.wantCount || len(rows.Rows) != tt.wantRows || rows.PageSize != domain.TablePageSize {
+						t.Errorf("rows = %#v, want count %d rows %d and page size %d", rows, tt.wantCount, tt.wantRows, domain.TablePageSize)
+					}
+					if tt.verifyTypes {
+						assertIntegrationRowValueTypes(t, rows)
+					}
+				})
+			}
+		})
+	}
+}
+
+// 行値種別検証
+func assertIntegrationRowValueTypes(t *testing.T, rows domain.TableRows) {
+	t.Helper()
+
+	if len(rows.Rows) == 0 || len(rows.Rows[0].Cells) != 6 {
+		t.Fatalf("Rows = %#v, want first row with six cells", rows)
+	}
+	cells := rows.Rows[0].Cells
+	if cells[0].Value != "1" || cells[2].Kind != domain.CellKindNull || cells[3].Value != `{"key": 1}` || cells[4].Value != "AQI=" || cells[5].Value != "2026-08-05T12:34:56Z" {
+		t.Errorf("Rows[0].Cells = %#v, want converted NULL, JSON, binary and RFC3339 time", cells)
+	}
+}
+
 // 統計検証データ投入
 func integrationStatisticsSeed(t *testing.T, database *sql.DB, kind db.Kind) {
 	t.Helper()
@@ -163,6 +237,21 @@ func integrationStatisticsSeed(t *testing.T, database *sql.DB, kind db.Kind) {
 			t.Fatalf("statistics seed %s Exec() error = %v", kind, err)
 		}
 	}
+	for id := 1; id <= 101; id++ {
+		statement := fmt.Sprintf("INSERT INTO schema_row_values (id, name, note, metadata, binary_data, occurred_at) VALUES (%d, 'row-%d', NULL, '{\"key\": %d}', %s, '2026-08-05 12:34:56')", id, id, id, integrationBinaryLiteral(kind))
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("row values seed %s Exec() error = %v", kind, err)
+		}
+	}
+}
+
+// バイナリー値リテラル取得
+func integrationBinaryLiteral(kind db.Kind) string {
+	if kind == db.MySQL {
+		return "X'0102'"
+	}
+
+	return "decode('0102', 'hex')"
 }
 
 // カラム統計名前別取得
@@ -422,6 +511,7 @@ func integrationSchemaStatements(kind db.Kind) []string {
 			"CREATE TABLE schema_cycle_right (id INT NOT NULL PRIMARY KEY, left_id INT NOT NULL, CONSTRAINT fk_schema_cycle_right_left FOREIGN KEY (left_id) REFERENCES schema_cycle_left (id))",
 			"ALTER TABLE schema_cycle_left ADD CONSTRAINT fk_schema_cycle_left_right FOREIGN KEY (right_id) REFERENCES schema_cycle_right (id)",
 			"CREATE TABLE schema_isolated (id INT NOT NULL PRIMARY KEY, optional_note VARCHAR(32) NULL DEFAULT 'isolated-default', generated_value INT GENERATED ALWAYS AS (id + 1) STORED)",
+			"CREATE TABLE schema_row_values (id INT NOT NULL, name VARCHAR(32) NOT NULL, note VARCHAR(32) NULL, metadata JSON NOT NULL, binary_data BLOB NOT NULL, occurred_at DATETIME NOT NULL)",
 		}
 	}
 	return []string{
@@ -435,6 +525,7 @@ func integrationSchemaStatements(kind db.Kind) []string {
 		"CREATE TABLE schema_cycle_right (id INTEGER PRIMARY KEY, left_id INTEGER NOT NULL, CONSTRAINT fk_schema_cycle_right_left FOREIGN KEY (left_id) REFERENCES schema_cycle_left (id))",
 		"ALTER TABLE schema_cycle_left ADD CONSTRAINT fk_schema_cycle_left_right FOREIGN KEY (right_id) REFERENCES schema_cycle_right (id)",
 		"CREATE TABLE schema_isolated (id INTEGER PRIMARY KEY, optional_note VARCHAR(32) NULL DEFAULT 'isolated-default', generated_value INTEGER GENERATED ALWAYS AS (id + 1) STORED)",
+		"CREATE TABLE schema_row_values (id INTEGER NOT NULL, name VARCHAR(32) NOT NULL, note VARCHAR(32) NULL, metadata JSON NOT NULL, binary_data BYTEA NOT NULL, occurred_at TIMESTAMP NOT NULL)",
 	}
 }
 
@@ -447,6 +538,7 @@ func integrationCleanupStatements(kind db.Kind) []string {
 			"DROP TABLE IF EXISTS schema_cycle_right",
 			"DROP TABLE IF EXISTS schema_cycle_left",
 			"DROP TABLE IF EXISTS schema_isolated",
+			"DROP TABLE IF EXISTS schema_row_values",
 			"DROP TABLE IF EXISTS schema_parent",
 			"SET FOREIGN_KEY_CHECKS = 1",
 		}
@@ -456,6 +548,7 @@ func integrationCleanupStatements(kind db.Kind) []string {
 		"DROP TABLE IF EXISTS schema_cycle_left CASCADE",
 		"DROP TABLE IF EXISTS schema_cycle_right CASCADE",
 		"DROP TABLE IF EXISTS schema_isolated",
+		"DROP TABLE IF EXISTS schema_row_values",
 		"DROP TABLE IF EXISTS schema_parent",
 	}
 

@@ -3,8 +3,11 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -710,4 +713,183 @@ func tableStructureQueries(dbType domain.DBType) (string, string, string) {
 	}
 
 	return postgresTableStructureColumnQuery, postgresTableStructureForeignKeyQuery, postgresTableStructureIndexQuery
+}
+
+// テーブル行取得
+func (r *AppRepository) ListRows(ctx context.Context, profile domain.Profile, password string, query domain.TableQuery) (domain.TableRows, error) {
+	driverName, dsn := connectionDSN(profile, password)
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return domain.TableRows{}, err
+	}
+	defer database.Close()
+
+	if err := database.PingContext(ctx); err != nil {
+		return domain.TableRows{}, err
+	}
+
+	return listRows(ctx, database, profile.DBType, query)
+}
+
+// テーブル行問い合わせ実行
+func listRows(ctx context.Context, database *sql.DB, dbType domain.DBType, query domain.TableQuery) (domain.TableRows, error) {
+	if err := query.Validate(); err != nil {
+		return domain.TableRows{}, err
+	}
+
+	where, args := tableRowsWhere(dbType, query.Filter)
+	table := qualifiedIdentifier(dbType, query.Table.Namespace, query.Table.Name)
+	countQuery := "SELECT COUNT(*) FROM " + table + where
+	var totalCount int64
+	if err := database.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount); err != nil {
+		return domain.TableRows{}, err
+	}
+
+	columns := make([]string, 0, len(query.Columns))
+	for _, column := range query.Columns {
+		columns = append(columns, quoteIdentifier(dbType, column.Name))
+	}
+	//nolint:gosec // 識別子はTableQuery.Validateで許可済み列に限定し、値はプレースホルダーで渡す。
+	rowQuery := "SELECT " + strings.Join(columns, ", ") + " FROM " + table + where + tableRowsOrder(dbType, query)
+	offset := (query.Page - 1) * domain.TablePageSize
+	if dbType == domain.DBTypeMySQL {
+		rowQuery += " LIMIT ? OFFSET ?"
+		args = append(args, domain.TablePageSize, offset)
+	} else {
+		rowQuery += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+		args = append(args, domain.TablePageSize, offset)
+	}
+	rows, err := database.QueryContext(ctx, rowQuery, args...)
+	if err != nil {
+		return domain.TableRows{}, err
+	}
+	defer rows.Close()
+
+	result := domain.TableRows{Rows: []domain.TableRow{}, TotalCount: totalCount, Page: query.Page, PageSize: domain.TablePageSize, Sort: query.Sort, Filter: query.Filter}
+	for rows.Next() {
+		values := make([]any, len(query.Columns))
+		destinations := make([]any, len(values))
+		for index := range values {
+			destinations[index] = &values[index]
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return domain.TableRows{}, err
+		}
+
+		row := domain.TableRow{Cells: make([]domain.CellValue, 0, len(values))}
+		for index, value := range values {
+			row.Cells = append(row.Cells, tableCellValue(value, query.Columns[index]))
+		}
+		result.Rows = append(result.Rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.TableRows{}, err
+	}
+
+	return result, nil
+}
+
+// テーブル行並び替え生成
+func tableRowsOrder(dbType domain.DBType, query domain.TableQuery) string {
+	if query.Sort != nil {
+		return " ORDER BY " + quoteIdentifier(dbType, query.Sort.Column) + " " + strings.ToUpper(string(query.Sort.Direction))
+	}
+
+	primaryKeys := make([]string, 0)
+	for _, column := range query.Columns {
+		if column.IsPrimaryKey {
+			primaryKeys = append(primaryKeys, quoteIdentifier(dbType, column.Name)+" ASC")
+		}
+	}
+	if len(primaryKeys) == 0 {
+		return ""
+	}
+
+	return " ORDER BY " + strings.Join(primaryKeys, ", ")
+}
+
+// テーブル行条件生成
+func tableRowsWhere(dbType domain.DBType, filter *domain.FilterGroup) (string, []any) {
+	if filter == nil {
+		return "", nil
+	}
+
+	fragment, args := tableRowsFilter(dbType, *filter, 1)
+
+	return " WHERE " + fragment, args
+}
+
+// フィルターSQL生成
+func tableRowsFilter(dbType domain.DBType, group domain.FilterGroup, parameter int) (string, []any) {
+	parts := make([]string, 0, len(group.Filters)+len(group.Groups))
+	args := []any{}
+	for _, filter := range group.Filters {
+		column := quoteIdentifier(dbType, filter.Column)
+		switch filter.Operator {
+		case domain.FilterOperatorIsNull, domain.FilterOperatorIsNotNull:
+			parts = append(parts, column+" "+string(filter.Operator))
+		case domain.FilterOperatorIn:
+			placeholders := make([]string, 0, len(filter.Values))
+			for _, value := range filter.Values {
+				placeholders = append(placeholders, tableRowsPlaceholder(dbType, parameter))
+				parameter++
+				args = append(args, value)
+			}
+			parts = append(parts, column+" IN ("+strings.Join(placeholders, ", ")+")")
+		case domain.FilterOperatorBetween:
+			left := tableRowsPlaceholder(dbType, parameter)
+			parameter++
+			right := tableRowsPlaceholder(dbType, parameter)
+			parameter++
+			parts = append(parts, column+" BETWEEN "+left+" AND "+right)
+			args = append(args, filter.Values[0], filter.Values[1])
+		default:
+			parts = append(parts, column+" "+string(filter.Operator)+" "+tableRowsPlaceholder(dbType, parameter))
+			parameter++
+			args = append(args, filter.Values[0])
+		}
+	}
+	for _, child := range group.Groups {
+		fragment, childArgs := tableRowsFilter(dbType, child, parameter)
+		parts = append(parts, "("+fragment+")")
+		args = append(args, childArgs...)
+		parameter += len(childArgs)
+	}
+
+	return strings.Join(parts, " "+strings.ToUpper(string(group.Operator))+" "), args
+}
+
+// プレースホルダー生成
+func tableRowsPlaceholder(dbType domain.DBType, parameter int) string {
+	if dbType == domain.DBTypeMySQL {
+		return "?"
+	}
+
+	return "$" + strconv.Itoa(parameter)
+}
+
+// セル値変換
+func tableCellValue(value any, column domain.Column) domain.CellValue {
+	if value == nil {
+		return domain.CellValue{Kind: domain.CellKindNull}
+	}
+
+	dataType := strings.ToLower(column.DataType)
+	if bytes, found := value.([]byte); found {
+		if strings.Contains(dataType, "blob") || strings.Contains(dataType, "binary") || strings.Contains(dataType, "bytea") {
+			return domain.CellValue{Kind: domain.CellKindValue, Value: base64.StdEncoding.EncodeToString(bytes)}
+		}
+
+		return domain.CellValue{Kind: domain.CellKindValue, Value: string(bytes)}
+	}
+	if timestamp, found := value.(time.Time); found {
+		return domain.CellValue{Kind: domain.CellKindValue, Value: timestamp.Format(time.RFC3339Nano)}
+	}
+
+	text := fmt.Sprint(value)
+	if strings.Contains(dataType, "json") && json.Valid([]byte(text)) {
+		return domain.CellValue{Kind: domain.CellKindValue, Value: text}
+	}
+
+	return domain.CellValue{Kind: domain.CellKindValue, Value: text}
 }

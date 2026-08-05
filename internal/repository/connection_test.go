@@ -6,7 +6,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 )
 
@@ -48,11 +50,21 @@ func TestConnectionDSN(t *testing.T) {
 		verify     func(*testing.T, string)
 	}{
 		{
-			name:       "MySQLはTLSなしと3秒タイムアウトを指定する",
+			name:       "MySQLはUTCの日時変換と3秒タイムアウトを指定する",
 			profile:    connectionTestProfile(t, domain.DBTypeMySQL),
 			wantDriver: "mysql",
 			verify: func(t *testing.T, dsn string) {
 				t.Helper()
+				config, err := mysql.ParseDSN(dsn)
+				if err != nil {
+					t.Fatalf("mysql.ParseDSN() error = %v", err)
+				}
+				if !config.ParseTime {
+					t.Error("ParseTime = false, want true")
+				}
+				if config.Loc != time.UTC {
+					t.Errorf("Loc = %v, want %v", config.Loc, time.UTC)
+				}
 				if dsn == "" || !containsAll(dsn, []string{"tls=false", "timeout=3s", "readTimeout=3s", "writeTimeout=3s"}) {
 					t.Errorf("connectionDSN() dsn = %q, want TLS disabled and 3 second timeouts", dsn)
 				}

@@ -38,6 +38,10 @@ export function ListConnectionProfiles() {
   return window['go']['wails']['AppHandler']['ListConnectionProfiles']();
 }
 
+export function ListTableRows(arg1) {
+  return window['go']['wails']['AppHandler']['ListTableRows'](arg1);
+}
+
 export function LoadFlowState() {
   return window['go']['wails']['AppHandler']['LoadFlowState']();
 }

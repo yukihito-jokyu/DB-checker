@@ -311,6 +311,56 @@ export namespace wails {
 	        this.message = source["message"];
 	    }
 	}
+	export class TableFilterRequest {
+	    column: string;
+	    operator: string;
+	    values: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new TableFilterRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.column = source["column"];
+	        this.operator = source["operator"];
+	        this.values = source["values"];
+	    }
+	}
+	export class FilterGroupRequest {
+	    operator: string;
+	    filters: TableFilterRequest[];
+	    groups: FilterGroupRequest[];
+
+	    static createFrom(source: any = {}) {
+	        return new FilterGroupRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operator = source["operator"];
+	        this.filters = this.convertValues(source["filters"], TableFilterRequest);
+	        this.groups = this.convertValues(source["groups"], FilterGroupRequest);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class TableFlowStateResponse {
 	    x: number;
 	    y: number;
@@ -383,6 +433,56 @@ export namespace wails {
 	        this.nullCount = this.convertValues(source["nullCount"], StatisticCountResponse);
 	        this.referencedRowCount = this.convertValues(source["referencedRowCount"], StatisticCountResponse);
 	        this.missingReferenceCount = this.convertValues(source["missingReferenceCount"], StatisticCountResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TableSortRequest {
+	    column: string;
+	    direction: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TableSortRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.column = source["column"];
+	        this.direction = source["direction"];
+	    }
+	}
+	export class ListTableRowsRequest {
+	    table: string;
+	    page: number;
+	    sort?: TableSortRequest;
+	    filter?: FilterGroupRequest;
+
+	    static createFrom(source: any = {}) {
+	        return new ListTableRowsRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.table = source["table"];
+	        this.page = source["page"];
+	        this.sort = this.convertValues(source["sort"], TableSortRequest);
+	        this.filter = this.convertValues(source["filter"], FilterGroupRequest);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -605,6 +705,122 @@ export namespace wails {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.data = this.convertValues(source["data"], StatusResponse);
+	        this.error = this.convertValues(source["error"], ErrorResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TableCellResponse {
+	    kind: string;
+	    value?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TableCellResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.value = source["value"];
+	    }
+	}
+	export class TableRowResponse {
+	    cells: TableCellResponse[];
+
+	    static createFrom(source: any = {}) {
+	        return new TableRowResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cells = this.convertValues(source["cells"], TableCellResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TableRowsResponse {
+	    rows: TableRowResponse[];
+	    totalCount: number;
+	    page: number;
+	    pageSize: number;
+	    sort?: TableSortRequest;
+	    filter?: FilterGroupRequest;
+
+	    static createFrom(source: any = {}) {
+	        return new TableRowsResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rows = this.convertValues(source["rows"], TableRowResponse);
+	        this.totalCount = source["totalCount"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	        this.sort = this.convertValues(source["sort"], TableSortRequest);
+	        this.filter = this.convertValues(source["filter"], FilterGroupRequest);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableRowsResponse_ {
+	    data?: TableRowsResponse;
+	    error?: ErrorResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableRowsResponse_(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], TableRowsResponse);
 	        this.error = this.convertValues(source["error"], ErrorResponse);
 	    }
 
@@ -920,6 +1136,11 @@ export namespace wails {
 		    return a;
 		}
 	}
+
+
+
+
+
 
 
 

@@ -23,6 +23,9 @@ type inspectionRepositoryStub struct {
 	structureErr    error
 	statistics      domain.TableStatistics
 	statisticsErr   error
+	rows            domain.TableRows
+	rowsErr         error
+	rowsQuery       domain.TableQuery
 }
 
 // プロファイル読込再現
@@ -74,6 +77,13 @@ func (s *inspectionRepositoryStub) InspectTableStructure(context.Context, domain
 // テーブル統計取得再現
 func (s *inspectionRepositoryStub) InspectTableStatistics(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStatistics, error) {
 	return s.statistics, s.statisticsErr
+}
+
+// テーブル行一覧再現
+func (s *inspectionRepositoryStub) ListRows(_ context.Context, _ domain.Profile, _ string, query domain.TableQuery) (domain.TableRows, error) {
+	s.rowsQuery = query
+
+	return s.rows, s.rowsErr
 }
 
 // データベーススキーマ取得検証
@@ -525,6 +535,267 @@ func TestAppUseCaseGetTableStatistics(t *testing.T) {
 			}
 			if got.Status != tt.wantStatus {
 				t.Errorf("Status = %q, want %q", got.Status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// テーブル行一覧取得検証
+func TestAppUseCaseListTableRows(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	structure := domain.TableStructure{
+		Table: domain.Table{
+			Namespace: "public",
+			Name:      "items",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int",
+					IsPrimaryKey: true,
+				},
+				{
+					Name:     "name",
+					DataType: "varchar",
+				},
+				{
+					Name:     "payload",
+					DataType: "json",
+				},
+			},
+		},
+	}
+	validRepository := inspectionRepositoryStub{
+		profiles:        []domain.Profile{profile},
+		activeID:        stringPointer(profile.ID),
+		credential:      "secret",
+		credentialFound: true,
+		structure:       structure,
+		rows: domain.TableRows{
+			Rows: []domain.TableRow{},
+		},
+	}
+	validQuery := domain.TableQuery{
+		Table: domain.TableRef{
+			Name: "items",
+		},
+		Page: 1,
+	}
+	tests := []struct {
+		name       string
+		query      domain.TableQuery
+		repository inspectionRepositoryStub
+		want       domain.TableRows
+		wantCode   apperr.Code
+		wantCause  string
+	}{
+		{
+			name:       "行一覧を返す",
+			query:      validQuery,
+			repository: validRepository,
+			want:       validRepository.rows,
+		},
+		{
+			name:  "プロファイル読込失敗を返す",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				loadErr: errors.New("profiles failed"),
+			},
+			wantCause: "profiles failed",
+		},
+		{
+			name:  "アクティブプロファイル未選択を返す",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:  "選択済みプロファイル不在を返す",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "空白テーブル名を入力不正として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: " "},
+				Page:  1,
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name: "不正ページを入力不正として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:  "資格情報取得失敗を分類する",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      stringPointer(profile.ID),
+				credentialErr: errors.New("credential failed"),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:  "資格情報未登録を返す",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:  "構造取得失敗をデータ取得失敗へ分類する",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structureErr:    errors.New("structure failed"),
+			},
+			wantCode: apperr.CodeDataLoadFailed,
+		},
+		{
+			name: "空グループを入力不正として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+				Page:  1,
+				Filter: &domain.FilterGroup{
+					Operator: domain.FilterGroupOperatorAnd,
+				},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name: "値不足を入力不正として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+				Page:  1,
+				Filter: &domain.FilterGroup{
+					Operator: domain.FilterGroupOperatorAnd,
+					Filters: []domain.TableFilter{
+						{
+							Column:   "id",
+							Operator: domain.FilterOperatorBetween,
+							Values:   []string{"1"},
+						},
+					},
+				},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name: "存在しない列をフィルター適用失敗として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+				Page:  1,
+				Filter: &domain.FilterGroup{
+					Operator: domain.FilterGroupOperatorAnd,
+					Filters: []domain.TableFilter{
+						{
+							Column:   "missing",
+							Operator: domain.FilterOperatorEqual,
+							Values:   []string{"1"},
+						},
+					},
+				},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeFilterApplyFailed,
+		},
+		{
+			name: "JSONのLIKEをフィルター適用失敗として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+				Page:  1,
+				Filter: &domain.FilterGroup{
+					Operator: domain.FilterGroupOperatorAnd,
+					Filters: []domain.TableFilter{
+						{
+							Column:   "payload",
+							Operator: domain.FilterOperatorLike,
+							Values:   []string{"%x%"},
+						},
+					},
+				},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeFilterApplyFailed,
+		},
+		{
+			name: "不正並び替え列を並び替え適用失敗として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+				Page:  1,
+				Sort: &domain.TableSort{
+					Column:    "missing",
+					Direction: domain.SortDirectionAscending,
+				},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeSortApplyFailed,
+		},
+		{
+			name: "不正並び替え方向を並び替え適用失敗として返す",
+			query: domain.TableQuery{
+				Table: domain.TableRef{Name: "items"},
+				Page:  1,
+				Sort: &domain.TableSort{
+					Column:    "id",
+					Direction: "up",
+				},
+			},
+			repository: validRepository,
+			wantCode:   apperr.CodeSortApplyFailed,
+		},
+		{
+			name:  "行取得失敗をデータ取得失敗へ分類する",
+			query: validQuery,
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				rowsErr:         errors.New("rows failed"),
+			},
+			wantCode: apperr.CodeDataLoadFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			got, err := NewAppUseCase(&repository).ListTableRows(context.Background(), tt.query)
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Errorf("ListTableRows() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if tt.wantCause != "" && (err == nil || err.Error() != tt.wantCause) {
+				t.Errorf("ListTableRows() error = %v, want %q", err, tt.wantCause)
+			}
+			if tt.wantCode != "" || tt.wantCause != "" {
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListTableRows() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ListTableRows() = %#v, want %#v", got, tt.want)
+			}
+			if repository.rowsQuery.Table.Namespace != profile.Schema {
+				t.Errorf("ListRows() query namespace = %q, want %q", repository.rowsQuery.Table.Namespace, profile.Schema)
 			}
 		})
 	}

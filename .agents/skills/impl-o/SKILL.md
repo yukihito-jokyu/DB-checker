@@ -42,6 +42,12 @@ description: "Issue起点の実装オーケストレーション。承認済み�
 6. 再レビュー（2ターン目）でも指摘があれば、修正を続けず、指摘と選択肢をユーザーへ差し戻す。指摘がない場合だけ検証へ進む。
 7. `references/verify.md` に従って自動検証とユーザー向け手動検証を整理し、`references/note.md` に従って `.local/<issue>/impl.md` を作る。
 
+## ユーザー指摘後の改善
+
+- ユーザーから成果物への修正依頼を受け、その修正と検証を完了した後は、必ず `skill-feedback-loop` を使用する。
+- `skill-feedback-loop` に従い、AIレビューで見抜けなかった理由を分析し、最も狭い改善先（skill、reference、template、script、または `AGENTS.md`）を比較してユーザーへ提案する。
+- skill、reference、template、script、`AGENTS.md` の変更は、提案に対するユーザーの明示承認後にだけ行う。
+
 ## 機密情報を扱うエラーログ
 
 - パスワード、トークン、接続文字列などを入力・依存先・原因エラーに含み得る処理では、原因エラーを文字列化する `Logger.Error` を使わない。
