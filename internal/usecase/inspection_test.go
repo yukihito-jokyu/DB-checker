@@ -19,6 +19,8 @@ type inspectionRepositoryStub struct {
 	credentialErr   error
 	schema          domain.Schema
 	inspectErr      error
+	structure       domain.TableStructure
+	structureErr    error
 }
 
 // プロファイル読込再現
@@ -60,6 +62,11 @@ func (*inspectionRepositoryStub) CheckConnection(context.Context, domain.Profile
 // スキーマ取得再現
 func (s *inspectionRepositoryStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
 	return s.schema, s.inspectErr
+}
+
+// テーブル構造取得再現
+func (s *inspectionRepositoryStub) InspectTableStructure(context.Context, domain.Profile, string, domain.TableRef) (domain.TableStructure, error) {
+	return s.structure, s.structureErr
 }
 
 // データベーススキーマ取得検証
@@ -232,6 +239,139 @@ func TestAppUseCaseGetDatabaseSchema(t *testing.T) {
 				if !reflect.DeepEqual(gotSchema, tt.wantSchema) {
 					t.Errorf("GetDatabaseSchema() schema = %#v, want %#v", gotSchema, tt.wantSchema)
 				}
+			}
+		})
+	}
+}
+
+// テーブル構造取得検証
+func TestAppUseCaseGetTableStructure(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	defaultValue := "nextval('items_id_seq')"
+	profilesErr := errors.New("profiles failed")
+	credentialErr := errors.New("credential failed")
+	structure := domain.TableStructure{
+		Table:   domain.Table{Namespace: "public", Name: "items", Columns: []domain.Column{{Name: "id", DataType: "int4", DefaultValue: &defaultValue, IsPrimaryKey: true, IsUnique: true}}},
+		Indexes: []domain.Index{{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"}},
+	}
+	tests := []struct {
+		name       string
+		table      string
+		repository inspectionRepositoryStub
+		want       domain.TableStructure
+		wantCode   apperr.Code
+		wantCause  error
+	}{
+		{
+			name:  "有効なテーブル構造を返す",
+			table: "items",
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+			},
+			want: structure,
+		},
+		{
+			name: "プロファイル読込失敗を返す",
+			repository: inspectionRepositoryStub{
+				loadErr: profilesErr,
+			},
+			wantCause: profilesErr,
+		},
+		{
+			name: "有効プロファイルが未選択ならプロファイル未検出を返す",
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "選択済みプロファイルが存在しないならプロファイル未検出を返す",
+			repository: inspectionRepositoryStub{
+				activeID: stringPointer("missing"),
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:  "空白テーブル名を入力検証する",
+			table: " ",
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name:  "資格情報取得失敗を資格情報利用不可へ分類する",
+			table: "items",
+			repository: inspectionRepositoryStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      stringPointer(profile.ID),
+				credentialErr: credentialErr,
+			},
+			wantCode:  apperr.CodeCredentialUnavailable,
+			wantCause: credentialErr,
+		},
+		{
+			name:  "資格情報未登録を資格情報利用不可へ分類する",
+			table: "items",
+			repository: inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:  "存在しないテーブルをスキーマ取得失敗へ分類する",
+			table: "missing",
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structureErr:    errors.New("table not found"),
+			},
+			wantCode: apperr.CodeSchemaLoadFailed,
+		},
+		{
+			name:  "不正なテーブル構造をスキーマ取得失敗へ分類する",
+			table: "items",
+			repository: inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				structure: domain.TableStructure{
+					Table: domain.Table{
+						Namespace: "public",
+						Name:      "other",
+					},
+				},
+			},
+			wantCode: apperr.CodeSchemaLoadFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewAppUseCase(&tt.repository).GetTableStructure(context.Background(), tt.table)
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Errorf("GetTableStructure() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Errorf("GetTableStructure() error = %v, want cause %v", err, tt.wantCause)
+			}
+			if tt.wantCode != "" || tt.wantCause != nil {
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetTableStructure() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetTableStructure() = %#v, want %#v", got, tt.want)
 			}
 		})
 	}

@@ -55,6 +55,64 @@ func TestAppUseCaseGetDatabaseSchemaIntegration(t *testing.T) {
 	}
 }
 
+// テーブル構造取得結合検証
+func TestAppUseCaseGetTableStructureIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			database := integrationDatabase(t, target)
+			defer database.Close()
+			adminDatabase := integrationAdminDatabase(t, target)
+			if adminDatabase != nil {
+				defer adminDatabase.Close()
+			}
+			defer integrationSchemaCleanup(t, database, adminDatabase, target.Kind)
+			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
+
+			appRepository, _, _ := integrationInspectionRepository(t, target)
+			structure, err := NewAppUseCase(appRepository).GetTableStructure(context.Background(), "schema_child")
+			if err != nil {
+				t.Fatalf("GetTableStructure() error = %v", err)
+			}
+			if structure.Table.Name != "schema_child" || len(structure.Table.Columns) == 0 {
+				t.Errorf("Table = %#v, want schema_child with columns", structure.Table)
+			}
+			assertIntegrationForeignKey(t, structure.ForeignKeys, "fk_schema_child_parent", "schema_child", []string{"parent_a", "parent_b"}, "schema_parent", []string{"part_a", "part_b"})
+			assertIntegrationIndexes(t, target.Kind, structure.Indexes)
+			isolated, err := NewAppUseCase(appRepository).GetTableStructure(context.Background(), "schema_isolated")
+			if err != nil {
+				t.Fatalf("GetTableStructure() isolated error = %v", err)
+			}
+			if !integrationDetailedColumnsFound(isolated.Table.Columns) {
+				t.Errorf("Columns = %#v, want default and generated columns", isolated.Table.Columns)
+			}
+			_, err = NewAppUseCase(appRepository).GetTableStructure(context.Background(), "missing_table")
+			if !apperr.IsCode(err, apperr.CodeSchemaLoadFailed) {
+				t.Errorf("GetTableStructure() missing error = %v, want code %q", err, apperr.CodeSchemaLoadFailed)
+			}
+		})
+	}
+}
+
+// 詳細カラム属性検出
+func integrationDetailedColumnsFound(columns []domain.Column) bool {
+	defaultFound := false
+	generatedFound := false
+	for _, column := range columns {
+		if column.DefaultValue != nil {
+			defaultFound = true
+		}
+		if column.IsGenerated {
+			generatedFound = true
+		}
+	}
+
+	return defaultFound && generatedFound
+}
+
 // スキーマ検証用リポジトリ生成
 func integrationInspectionRepository(t *testing.T, target db.Target) (*integrationAppRepository, domain.Profile, string) {
 	t.Helper()
@@ -175,6 +233,36 @@ func assertIntegrationForeignKey(t *testing.T, foreignKeys []domain.ForeignKey, 
 	t.Errorf("ForeignKey %q = missing", name)
 }
 
+// インデックス属性検証
+func assertIntegrationIndexes(t *testing.T, kind db.Kind, indexes []domain.Index) {
+	t.Helper()
+
+	primaryKeyName := "schema_child_pkey"
+	if kind == db.MySQL {
+		primaryKeyName = "PRIMARY"
+	}
+	assertIntegrationIndex(t, indexes, primaryKeyName, []string{"id"}, true, "btree")
+	assertIntegrationIndex(t, indexes, "idx_schema_child_status", []string{"status"}, false, "btree")
+	assertIntegrationIndex(t, indexes, "idx_schema_child_parent_status", []string{"parent_b", "status"}, false, "btree")
+}
+
+// 個別インデックス属性検証
+func assertIntegrationIndex(t *testing.T, indexes []domain.Index, name string, columns []string, unique bool, kind string) {
+	t.Helper()
+
+	for _, index := range indexes {
+		if index.Name != name {
+			continue
+		}
+		if !equalIntegrationStrings(index.Columns, columns) || index.Unique != unique || index.Kind != kind {
+			t.Errorf("Index %q = %#v, want columns=%v unique=%v kind=%q", name, index, columns, unique, kind)
+		}
+
+		return
+	}
+	t.Errorf("Index %q = missing", name)
+}
+
 // 文字列スライス一致判定
 func equalIntegrationStrings(left, right []string) bool {
 	return reflect.DeepEqual(left, right)
@@ -251,22 +339,24 @@ func integrationSchemaStatements(kind db.Kind) []string {
 	if kind == db.MySQL {
 		return []string{
 			"CREATE TABLE schema_parent (part_a INT NOT NULL, part_b INT NOT NULL, code VARCHAR(32) NOT NULL UNIQUE, optional_note VARCHAR(32) NULL DEFAULT 'parent-default', PRIMARY KEY (part_a, part_b))",
-			"CREATE TABLE schema_child (id INT NOT NULL PRIMARY KEY, parent_a INT NOT NULL, parent_b INT NOT NULL, status VARCHAR(32) NOT NULL, INDEX idx_schema_child_status (status), CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
+			"CREATE TABLE schema_child (id INT NOT NULL PRIMARY KEY, parent_a INT NOT NULL, parent_b INT NOT NULL, status VARCHAR(32) NOT NULL, INDEX idx_schema_child_status (status), INDEX idx_schema_child_parent_status (parent_b, status), CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
 			"CREATE TABLE schema_cycle_left (id INT NOT NULL PRIMARY KEY, right_id INT NOT NULL)",
 			"CREATE TABLE schema_cycle_right (id INT NOT NULL PRIMARY KEY, left_id INT NOT NULL, CONSTRAINT fk_schema_cycle_right_left FOREIGN KEY (left_id) REFERENCES schema_cycle_left (id))",
 			"ALTER TABLE schema_cycle_left ADD CONSTRAINT fk_schema_cycle_left_right FOREIGN KEY (right_id) REFERENCES schema_cycle_right (id)",
-			"CREATE TABLE schema_isolated (id INT NOT NULL PRIMARY KEY, optional_note VARCHAR(32) NULL DEFAULT 'isolated-default')",
+			"CREATE TABLE schema_isolated (id INT NOT NULL PRIMARY KEY, optional_note VARCHAR(32) NULL DEFAULT 'isolated-default', generated_value INT GENERATED ALWAYS AS (id + 1) STORED)",
 		}
 	}
 	return []string{
 		"CREATE SCHEMA integration_outside",
 		"CREATE TABLE integration_outside.schema_outside (id INTEGER PRIMARY KEY)",
 		"CREATE TABLE schema_parent (part_a INTEGER NOT NULL, part_b INTEGER NOT NULL, code VARCHAR(32) NOT NULL UNIQUE, optional_note VARCHAR(32) NULL DEFAULT 'parent-default', PRIMARY KEY (part_a, part_b))",
-		"CREATE TABLE schema_child (id INTEGER PRIMARY KEY, parent_a INTEGER NOT NULL, parent_b INTEGER NOT NULL, CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
+		"CREATE TABLE schema_child (id INTEGER PRIMARY KEY, parent_a INTEGER NOT NULL, parent_b INTEGER NOT NULL, status VARCHAR(32) NOT NULL, CONSTRAINT fk_schema_child_parent FOREIGN KEY (parent_a, parent_b) REFERENCES schema_parent (part_a, part_b))",
+		"CREATE INDEX idx_schema_child_status ON schema_child (status)",
+		"CREATE INDEX idx_schema_child_parent_status ON schema_child (parent_b, status)",
 		"CREATE TABLE schema_cycle_left (id INTEGER PRIMARY KEY, right_id INTEGER NOT NULL)",
 		"CREATE TABLE schema_cycle_right (id INTEGER PRIMARY KEY, left_id INTEGER NOT NULL, CONSTRAINT fk_schema_cycle_right_left FOREIGN KEY (left_id) REFERENCES schema_cycle_left (id))",
 		"ALTER TABLE schema_cycle_left ADD CONSTRAINT fk_schema_cycle_left_right FOREIGN KEY (right_id) REFERENCES schema_cycle_right (id)",
-		"CREATE TABLE schema_isolated (id INTEGER PRIMARY KEY, optional_note VARCHAR(32) NULL DEFAULT 'isolated-default')",
+		"CREATE TABLE schema_isolated (id INTEGER PRIMARY KEY, optional_note VARCHAR(32) NULL DEFAULT 'isolated-default', generated_value INTEGER GENERATED ALWAYS AS (id + 1) STORED)",
 	}
 }
 
