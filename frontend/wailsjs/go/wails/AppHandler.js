@@ -37,3 +37,7 @@ export function LoadFlowState() {
 export function SaveConnectionProfile(arg1) {
   return window['go']['wails']['AppHandler']['SaveConnectionProfile'](arg1);
 }
+
+export function SaveFlowState(arg1) {
+  return window['go']['wails']['AppHandler']['SaveFlowState'](arg1);
+}

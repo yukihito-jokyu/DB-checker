@@ -32,6 +32,9 @@ type connectionProfileRepositoryStub struct {
 	password        string
 	flowState       domain.FlowState
 	flowStateErr    error
+	savedFlowState  domain.FlowState
+	savedFlowID     string
+	saveFlowErr     error
 }
 
 // スキーマ取得再現
@@ -42,6 +45,14 @@ func (s *connectionProfileRepositoryStub) InspectSchema(context.Context, domain.
 // フロー状態読込再現
 func (s *connectionProfileRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
 	return s.flowState, s.flowStateErr
+}
+
+// フロー状態保存再現
+func (s *connectionProfileRepositoryStub) SaveFlowState(profileID string, state domain.FlowState) error {
+	s.savedFlowID = profileID
+	s.savedFlowState = state
+
+	return s.saveFlowErr
 }
 
 // 接続プロファイル読込再現

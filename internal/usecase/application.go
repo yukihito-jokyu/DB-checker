@@ -10,6 +10,7 @@ import (
 type AppRepository interface {
 	LoadProfiles() ([]domain.Profile, *string, error)
 	LoadFlowState(string) (domain.FlowState, error)
+	SaveFlowState(string, domain.FlowState) error
 	SaveProfiles([]domain.Profile, *string) error
 	GetCredential(string) (credential string, found bool, err error)
 	SetCredential(string, string) error

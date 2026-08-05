@@ -1,15 +1,23 @@
 package repository
 
 import (
+	"sync"
+
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
 	"github.com/zalando/go-keyring"
 )
 
 // アプリケーションリポジトリ
 type AppRepository struct {
-	store             *config.Store
+	store             configStore
 	credentials       credentialStore
 	connectionChecker connectionChecker
+	configMu          sync.Mutex
+}
+
+type configStore interface {
+	Load() (config.LoadResult, error)
+	Save(config.Config) error
 }
 
 // アプリケーションリポジトリ生成
@@ -18,7 +26,7 @@ func NewAppRepository(store *config.Store) *AppRepository {
 }
 
 // テスト用リポジトリ生成
-func newAppRepository(store *config.Store, credentials credentialStore, checkers ...connectionChecker) *AppRepository {
+func newAppRepository(store configStore, credentials credentialStore, checkers ...connectionChecker) *AppRepository {
 	connectionChecker := connectionChecker(databaseConnectionChecker{})
 	if len(checkers) > 0 {
 		connectionChecker = checkers[0]

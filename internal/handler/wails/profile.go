@@ -46,6 +46,28 @@ func (h *AppHandler) LoadFlowState() Response[FlowStateResponse] {
 	return OK(toFlowStateResponse(state))
 }
 
+// フロー状態保存
+func (h *AppHandler) SaveFlowState(request SaveFlowStateRequest) Response[FlowStateResponse] {
+	h.logger.Info(context.Background(), "flow state save requested", slog.String("operation", "flow_state_save"))
+
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeConfigReadFailed)
+		h.logFailureWithCode("flow state save failed", "flow_state_save", err)
+
+		return Fail[FlowStateResponse](err)
+	}
+
+	state := toFlowState(request)
+	savedState, err := h.appUseCase.SaveFlowState(state)
+	if err != nil {
+		h.logFailureWithCode("flow state save failed", "flow_state_save", err)
+
+		return Fail[FlowStateResponse](err)
+	}
+
+	return OK(toFlowStateResponse(savedState))
+}
+
 // フロー状態レスポンス変換
 func toFlowStateResponse(state domain.FlowState) FlowStateResponse {
 	tableStates := make(map[string]TableFlowStateResponse, len(state.TableStates))
@@ -54,6 +76,16 @@ func toFlowStateResponse(state domain.FlowState) FlowStateResponse {
 	}
 
 	return FlowStateResponse{Version: state.Version, TableStates: tableStates}
+}
+
+// 保存リクエストのフロー状態変換
+func toFlowState(request SaveFlowStateRequest) domain.FlowState {
+	tableStates := make(map[string]domain.TableFlowState, len(request.TableStates))
+	for tableName, tableState := range request.TableStates {
+		tableStates[tableName] = domain.TableFlowState{X: tableState.X, Y: tableState.Y, Expanded: tableState.Expanded}
+	}
+
+	return domain.FlowState{Version: request.Version, TableStates: tableStates}
 }
 
 // 接続プロファイル保存

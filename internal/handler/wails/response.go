@@ -99,6 +99,17 @@ type FlowStateResponse struct {
 	TableStates map[string]TableFlowStateResponse `json:"tableStates"`
 }
 
+type SaveFlowStateRequest struct {
+	Version     int                              `json:"version"`
+	TableStates map[string]TableFlowStateRequest `json:"tableStates"`
+}
+
+type TableFlowStateRequest struct {
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Expanded bool    `json:"expanded"`
+}
+
 type Response[T any] struct {
 	Data  *T             `json:"data"`
 	Error *ErrorResponse `json:"error"`

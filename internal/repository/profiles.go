@@ -59,6 +59,26 @@ func (r *AppRepository) LoadFlowState(profileID string) (domain.FlowState, error
 	return decodeFlowState(raw), nil
 }
 
+// プロファイル別フロー状態保存
+func (r *AppRepository) SaveFlowState(profileID string, state domain.FlowState) error {
+	r.configMu.Lock()
+	defer r.configMu.Unlock()
+
+	result, err := r.store.Load()
+	if err != nil {
+		return err
+	}
+
+	raw, err := encodeFlowState(state)
+	if err != nil {
+		return apperr.NewUnexpected(err)
+	}
+
+	result.Config.FlowStates[profileID] = raw
+
+	return r.store.Save(result.Config)
+}
+
 // フロー状態復号
 func decodeFlowState(raw json.RawMessage) domain.FlowState {
 	var stored storedFlowState
@@ -93,8 +113,31 @@ func decodeFlowState(raw json.RawMessage) domain.FlowState {
 	return state
 }
 
+// フロー状態符号化
+func encodeFlowState(state domain.FlowState) (json.RawMessage, error) {
+	tableStates := make(map[string]storedTableFlowState, len(state.TableStates))
+	for tableName, tableState := range state.TableStates {
+		x := tableState.X
+		y := tableState.Y
+		expanded := tableState.Expanded
+		tableStates[tableName] = storedTableFlowState{
+			X:        &x,
+			Y:        &y,
+			Expanded: &expanded,
+		}
+	}
+
+	return json.Marshal(storedFlowState{
+		Version:     state.Version,
+		TableStates: &tableStates,
+	})
+}
+
 // 接続プロファイル保存
 func (r *AppRepository) SaveProfiles(profiles []domain.Profile, activeID *string) error {
+	r.configMu.Lock()
+	defer r.configMu.Unlock()
+
 	result, err := r.store.Load()
 	if err != nil {
 		return err

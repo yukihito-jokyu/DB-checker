@@ -37,6 +37,9 @@ func (s *schemaRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
 	return s.flowState, s.flowStateErr
 }
 
+// フロー状態保存再現
+func (*schemaRepositoryStub) SaveFlowState(string, domain.FlowState) error { return nil }
+
 // プロファイル保存再現
 func (*schemaRepositoryStub) SaveProfiles([]domain.Profile, *string) error { return nil }
 

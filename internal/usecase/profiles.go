@@ -261,3 +261,22 @@ func (u *AppUseCase) LoadFlowState() (domain.FlowState, error) {
 
 	return u.repository.LoadFlowState(*activeID)
 }
+
+// アクティブプロファイルのフロー状態保存
+func (u *AppUseCase) SaveFlowState(state domain.FlowState) (domain.FlowState, error) {
+	_, activeID, err := u.LoadProfiles()
+	if err != nil {
+		return domain.FlowState{}, err
+	}
+	if activeID == nil {
+		return domain.FlowState{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+	if err := state.Validate(); err != nil {
+		return domain.FlowState{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+	if err := u.repository.SaveFlowState(*activeID, state); err != nil {
+		return domain.FlowState{}, err
+	}
+
+	return state, nil
+}
