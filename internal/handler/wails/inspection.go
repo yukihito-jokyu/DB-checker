@@ -140,6 +140,37 @@ func (h *AppHandler) InsertTableRow(request InsertTableRowRequest) Response[Affe
 	})
 }
 
+// テーブルセル更新
+func (h *AppHandler) UpdateTableCell(request UpdateTableCellRequest) Response[AffectedRowsResponse] {
+	h.logger.Info(context.Background(), "table cell update requested", slog.String("operation", "table_cell_update"))
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeCellUpdateFailed)
+		h.logFailureWithCode("table cell update failed", "table_cell_update", err)
+
+		return Fail[AffectedRowsResponse](err)
+	}
+
+	locator := make([]domain.ColumnValueInput, 0, len(request.Locator))
+	for _, value := range request.Locator {
+		locator = append(locator, domain.ColumnValueInput{Column: value.Column, Kind: domain.CellKind(value.Kind), Value: value.Value})
+	}
+	change := domain.CellUpdate{
+		Table:   domain.TableRef{Name: request.Table},
+		Locator: domain.RowLocator{Values: locator},
+		Column:  request.Column,
+		Value:   domain.CellValue{Kind: domain.CellKind(request.Value.Kind), Value: request.Value.Value},
+	}
+
+	affected, err := h.appUseCase.UpdateTableCell(context.Background(), change)
+	if err != nil {
+		h.logFailureWithCode("table cell update failed", "table_cell_update", err)
+
+		return Fail[AffectedRowsResponse](err)
+	}
+
+	return OK(AffectedRowsResponse{AffectedRows: affected.AffectedRows})
+}
+
 // 統計要求開始
 func (h *AppHandler) beginTableStatistics() (context.Context, context.CancelFunc, uint64) {
 	h.statisticsMu.Lock()

@@ -175,6 +175,13 @@ type InsertTableRowRequest struct {
 	Values []ColumnValueInputRequest `json:"values"`
 }
 
+type UpdateTableCellRequest struct {
+	Table   string                    `json:"table"`
+	Locator []ColumnValueInputRequest `json:"locator"`
+	Column  string                    `json:"column"`
+	Value   TableCellResponse         `json:"value"`
+}
+
 type AffectedRowsResponse struct {
 	AffectedRows int64 `json:"affectedRows"`
 }

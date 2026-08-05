@@ -62,6 +62,11 @@ func (*connectionProfileRepositoryStub) InsertRow(context.Context, domain.Profil
 	return domain.AffectedRows{}, nil
 }
 
+// テーブルセル更新再現
+func (*connectionProfileRepositoryStub) UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error) {
+	return domain.AffectedRows{}, nil
+}
+
 // フロー状態読込再現
 func (s *connectionProfileRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
 	return s.flowState, s.flowStateErr
