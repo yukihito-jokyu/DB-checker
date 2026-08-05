@@ -57,6 +57,11 @@ func (*connectionProfileRepositoryStub) ListRows(context.Context, domain.Profile
 	return domain.TableRows{}, nil
 }
 
+// テーブル行追加再現
+func (*connectionProfileRepositoryStub) InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error) {
+	return domain.AffectedRows{}, nil
+}
+
 // フロー状態読込再現
 func (s *connectionProfileRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
 	return s.flowState, s.flowStateErr

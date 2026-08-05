@@ -84,7 +84,14 @@ func (h *AppHandler) ListTableRows(request ListTableRowsRequest) Response[TableR
 
 		return Fail[TableRowsResponse](err)
 	}
-	query := domain.TableQuery{Table: domain.TableRef{Name: request.Table}, Page: request.Page, Sort: toTableSort(request.Sort), Filter: toFilterGroup(request.Filter)}
+	query := domain.TableQuery{
+		Table: domain.TableRef{
+			Name: request.Table,
+		},
+		Page:   request.Page,
+		Sort:   toTableSort(request.Sort),
+		Filter: toFilterGroup(request.Filter),
+	}
 	rows, err := h.appUseCase.ListTableRows(context.Background(), query)
 	if err != nil {
 		h.logFailureWithCode("table rows list failed", "table_rows_list", err)
@@ -93,6 +100,44 @@ func (h *AppHandler) ListTableRows(request ListTableRowsRequest) Response[TableR
 	}
 
 	return OK(toTableRowsResponse(rows))
+}
+
+// テーブル行追加
+func (h *AppHandler) InsertTableRow(request InsertTableRowRequest) Response[AffectedRowsResponse] {
+	h.logger.Info(context.Background(), "table row insert requested", slog.String("operation", "table_row_insert"))
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeRowAddFailed)
+		h.logFailureWithCode("table row insert failed", "table_row_insert", err)
+
+		return Fail[AffectedRowsResponse](err)
+	}
+
+	values := make([]domain.ColumnValueInput, 0, len(request.Values))
+	for _, val := range request.Values {
+		values = append(values, domain.ColumnValueInput{
+			Column: val.Column,
+			Kind:   domain.CellKind(val.Kind),
+			Value:  val.Value,
+		})
+	}
+
+	row := domain.InsertRow{
+		Table: domain.TableRef{
+			Name: request.Table,
+		},
+		Values: values,
+	}
+
+	affected, err := h.appUseCase.InsertTableRow(context.Background(), row)
+	if err != nil {
+		h.logFailureWithCode("table row insert failed", "table_row_insert", err)
+
+		return Fail[AffectedRowsResponse](err)
+	}
+
+	return OK(AffectedRowsResponse{
+		AffectedRows: affected.AffectedRows,
+	})
 }
 
 // 統計要求開始
@@ -136,17 +181,33 @@ func toDatabaseSchemaResponse(profile domain.Profile, schema domain.Schema) Data
 				IsUnique:     column.IsUnique,
 			})
 		}
-		tables = append(tables, DatabaseTableResponse{Namespace: table.Namespace, Name: table.Name, Columns: columns})
+		tables = append(tables, DatabaseTableResponse{
+			Namespace: table.Namespace,
+			Name:      table.Name,
+			Columns:   columns,
+		})
 	}
 	foreignKeys := make([]DatabaseForeignKeyResponse, 0, len(schema.ForeignKeys))
 	for _, foreignKey := range schema.ForeignKeys {
-		foreignKeys = append(foreignKeys, DatabaseForeignKeyResponse{Name: foreignKey.Name, FromTable: foreignKey.FromTable, FromColumns: foreignKey.FromColumns, ToTable: foreignKey.ToTable, ToColumns: foreignKey.ToColumns})
+		foreignKeys = append(foreignKeys, DatabaseForeignKeyResponse{
+			Name:        foreignKey.Name,
+			FromTable:   foreignKey.FromTable,
+			FromColumns: foreignKey.FromColumns,
+			ToTable:     foreignKey.ToTable,
+			ToColumns:   foreignKey.ToColumns,
+		})
 	}
 
 	return DatabaseSchemaResponse{
-		ActiveProfile: ActiveProfileResponse{ID: profile.ID, Name: profile.Name, DBType: string(profile.DBType), Database: profile.Database, Schema: profile.Schema},
-		Tables:        tables,
-		ForeignKeys:   foreignKeys,
+		ActiveProfile: ActiveProfileResponse{
+			ID:       profile.ID,
+			Name:     profile.Name,
+			DBType:   string(profile.DBType),
+			Database: profile.Database,
+			Schema:   profile.Schema,
+		},
+		Tables:      tables,
+		ForeignKeys: foreignKeys,
 	}
 }
 
@@ -167,15 +228,30 @@ func toTableStructureResponse(structure domain.TableStructure) TableStructureRes
 	}
 	foreignKeys := make([]DatabaseForeignKeyResponse, 0, len(structure.ForeignKeys))
 	for _, foreignKey := range structure.ForeignKeys {
-		foreignKeys = append(foreignKeys, DatabaseForeignKeyResponse{Name: foreignKey.Name, FromTable: foreignKey.FromTable, FromColumns: foreignKey.FromColumns, ToTable: foreignKey.ToTable, ToColumns: foreignKey.ToColumns})
+		foreignKeys = append(foreignKeys, DatabaseForeignKeyResponse{
+			Name:        foreignKey.Name,
+			FromTable:   foreignKey.FromTable,
+			FromColumns: foreignKey.FromColumns,
+			ToTable:     foreignKey.ToTable,
+			ToColumns:   foreignKey.ToColumns,
+		})
 	}
 	indexes := make([]TableStructureIndexResponse, 0, len(structure.Indexes))
 	for _, index := range structure.Indexes {
-		indexes = append(indexes, TableStructureIndexResponse{Name: index.Name, Columns: index.Columns, Unique: index.Unique, Kind: index.Kind})
+		indexes = append(indexes, TableStructureIndexResponse{
+			Name:    index.Name,
+			Columns: index.Columns,
+			Unique:  index.Unique,
+			Kind:    index.Kind,
+		})
 	}
 
 	return TableStructureResponse{
-		Table:       TableStructureTableResponse{Namespace: structure.Table.Namespace, Name: structure.Table.Name, Columns: columns},
+		Table: TableStructureTableResponse{
+			Namespace: structure.Table.Namespace,
+			Name:      structure.Table.Name,
+			Columns:   columns,
+		},
 		ForeignKeys: foreignKeys,
 		Indexes:     indexes,
 	}
@@ -185,11 +261,27 @@ func toTableStructureResponse(structure domain.TableStructure) TableStructureRes
 func toTableStatisticsResponse(statistics domain.TableStatistics) TableStatisticsResponse {
 	columns := make([]ColumnStatisticsResponse, 0, len(statistics.Columns))
 	for _, column := range statistics.Columns {
-		columns = append(columns, ColumnStatisticsResponse{Name: column.Name, NullCount: toStatisticCountResponse(column.NullCount), DistinctCount: toStatisticCountResponse(column.DistinctCount), DuplicateCount: toStatisticCountResponse(column.DuplicateCount), Min: toStatisticValueResponse(column.Min), Max: toStatisticValueResponse(column.Max)})
+		columns = append(columns, ColumnStatisticsResponse{
+			Name:           column.Name,
+			NullCount:      toStatisticCountResponse(column.NullCount),
+			DistinctCount:  toStatisticCountResponse(column.DistinctCount),
+			DuplicateCount: toStatisticCountResponse(column.DuplicateCount),
+			Min:            toStatisticValueResponse(column.Min),
+			Max:            toStatisticValueResponse(column.Max),
+		})
 	}
 	foreignKeys := make([]ForeignKeyStatisticsResponse, 0, len(statistics.ForeignKeys))
 	for _, foreignKey := range statistics.ForeignKeys {
-		foreignKeys = append(foreignKeys, ForeignKeyStatisticsResponse{Name: foreignKey.Name, FromColumns: foreignKey.FromColumns, ToTable: foreignKey.ToTable, ToColumns: foreignKey.ToColumns, SourceRowCount: toStatisticCountResponse(foreignKey.SourceRowCount), NullCount: toStatisticCountResponse(foreignKey.NullCount), ReferencedRowCount: toStatisticCountResponse(foreignKey.ReferencedRowCount), MissingReferenceCount: toStatisticCountResponse(foreignKey.MissingReferenceCount)})
+		foreignKeys = append(foreignKeys, ForeignKeyStatisticsResponse{
+			Name:                  foreignKey.Name,
+			FromColumns:           foreignKey.FromColumns,
+			ToTable:               foreignKey.ToTable,
+			ToColumns:             foreignKey.ToColumns,
+			SourceRowCount:        toStatisticCountResponse(foreignKey.SourceRowCount),
+			NullCount:             toStatisticCountResponse(foreignKey.NullCount),
+			ReferencedRowCount:    toStatisticCountResponse(foreignKey.ReferencedRowCount),
+			MissingReferenceCount: toStatisticCountResponse(foreignKey.MissingReferenceCount),
+		})
 	}
 
 	var collectedAt *string
@@ -198,17 +290,33 @@ func toTableStatisticsResponse(statistics domain.TableStatistics) TableStatistic
 		collectedAt = &formatted
 	}
 
-	return TableStatisticsResponse{Table: statistics.Table.Name, RowCount: toStatisticCountResponse(statistics.RowCount), ColumnCount: statistics.ColumnCount, CollectedAt: collectedAt, Status: string(statistics.Status), Columns: columns, ForeignKeys: foreignKeys}
+	return TableStatisticsResponse{
+		Table:       statistics.Table.Name,
+		RowCount:    toStatisticCountResponse(statistics.RowCount),
+		ColumnCount: statistics.ColumnCount,
+		CollectedAt: collectedAt,
+		Status:      string(statistics.Status),
+		Columns:     columns,
+		ForeignKeys: foreignKeys,
+	}
 }
 
 // 件数統計レスポンス変換
 func toStatisticCountResponse(statistic domain.StatisticCount) StatisticCountResponse {
-	return StatisticCountResponse{Value: statistic.Value, Status: string(statistic.Status), Reason: statistic.Reason}
+	return StatisticCountResponse{
+		Value:  statistic.Value,
+		Status: string(statistic.Status),
+		Reason: statistic.Reason,
+	}
 }
 
 // 値統計レスポンス変換
 func toStatisticValueResponse(statistic domain.StatisticValue) StatisticValueResponse {
-	return StatisticValueResponse{Value: statistic.Value, Status: string(statistic.Status), Reason: statistic.Reason}
+	return StatisticValueResponse{
+		Value:  statistic.Value,
+		Status: string(statistic.Status),
+		Reason: statistic.Reason,
+	}
 }
 
 // 並び替え変換
@@ -218,7 +326,10 @@ func toTableSort(request *TableSortRequest) *domain.TableSort {
 	if request == nil {
 		return nil
 	}
-	return &domain.TableSort{Column: request.Column, Direction: domain.SortDirection(request.Direction)}
+	return &domain.TableSort{
+		Column:    request.Column,
+		Direction: domain.SortDirection(request.Direction),
+	}
 }
 
 // フィルター変換
@@ -230,7 +341,11 @@ func toFilterGroup(request *FilterGroupRequest) *domain.FilterGroup {
 	}
 	filters := make([]domain.TableFilter, 0, len(request.Filters))
 	for _, filter := range request.Filters {
-		filters = append(filters, domain.TableFilter{Column: filter.Column, Operator: domain.FilterOperator(filter.Operator), Values: filter.Values})
+		filters = append(filters, domain.TableFilter{
+			Column:   filter.Column,
+			Operator: domain.FilterOperator(filter.Operator),
+			Values:   filter.Values,
+		})
 	}
 	groups := make([]domain.FilterGroup, 0, len(request.Groups))
 	for _, child := range request.Groups {
@@ -238,20 +353,36 @@ func toFilterGroup(request *FilterGroupRequest) *domain.FilterGroup {
 			groups = append(groups, *group)
 		}
 	}
-	return &domain.FilterGroup{Operator: domain.FilterGroupOperator(request.Operator), Filters: filters, Groups: groups}
+	return &domain.FilterGroup{
+		Operator: domain.FilterGroupOperator(request.Operator),
+		Filters:  filters,
+		Groups:   groups,
+	}
 }
 
 // テーブル行レスポンス変換
 //
 //nolint:nlreturn // 行とセルを連続して変換する。
 func toTableRowsResponse(rows domain.TableRows) TableRowsResponse {
-	result := TableRowsResponse{Rows: make([]TableRowResponse, 0, len(rows.Rows)), TotalCount: rows.TotalCount, Page: rows.Page, PageSize: rows.PageSize, Sort: toTableSortResponse(rows.Sort), Filter: toFilterGroupResponse(rows.Filter)}
+	result := TableRowsResponse{
+		Rows:       make([]TableRowResponse, 0, len(rows.Rows)),
+		TotalCount: rows.TotalCount,
+		Page:       rows.Page,
+		PageSize:   rows.PageSize,
+		Sort:       toTableSortResponse(rows.Sort),
+		Filter:     toFilterGroupResponse(rows.Filter),
+	}
 	for _, row := range rows.Rows {
 		cells := make([]TableCellResponse, 0, len(row.Cells))
 		for _, cell := range row.Cells {
-			cells = append(cells, TableCellResponse{Kind: string(cell.Kind), Value: cell.Value})
+			cells = append(cells, TableCellResponse{
+				Kind:  string(cell.Kind),
+				Value: cell.Value,
+			})
 		}
-		result.Rows = append(result.Rows, TableRowResponse{Cells: cells})
+		result.Rows = append(result.Rows, TableRowResponse{
+			Cells: cells,
+		})
 	}
 	return result
 }
@@ -263,7 +394,10 @@ func toTableSortResponse(sort *domain.TableSort) *TableSortRequest {
 	if sort == nil {
 		return nil
 	}
-	return &TableSortRequest{Column: sort.Column, Direction: string(sort.Direction)}
+	return &TableSortRequest{
+		Column:    sort.Column,
+		Direction: string(sort.Direction),
+	}
 }
 
 // フィルターレスポンス変換
@@ -275,7 +409,11 @@ func toFilterGroupResponse(group *domain.FilterGroup) *FilterGroupRequest {
 	}
 	filters := make([]TableFilterRequest, 0, len(group.Filters))
 	for _, filter := range group.Filters {
-		filters = append(filters, TableFilterRequest{Column: filter.Column, Operator: string(filter.Operator), Values: filter.Values})
+		filters = append(filters, TableFilterRequest{
+			Column:   filter.Column,
+			Operator: string(filter.Operator),
+			Values:   filter.Values,
+		})
 	}
 	groups := make([]FilterGroupRequest, 0, len(group.Groups))
 	for index := range group.Groups {
