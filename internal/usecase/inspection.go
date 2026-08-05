@@ -42,6 +42,44 @@ func (u *AppUseCase) GetDatabaseSchema(ctx context.Context) (domain.Profile, dom
 	return profile, schema, nil
 }
 
+// テーブル構造取得
+func (u *AppUseCase) GetTableStructure(ctx context.Context, table string) (domain.TableStructure, error) {
+	profiles, activeID, err := u.repository.LoadProfiles()
+	if err != nil {
+		return domain.TableStructure{}, err
+	}
+	if activeID == nil {
+		return domain.TableStructure{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile, found := findProfile(profiles, *activeID)
+	if !found {
+		return domain.TableStructure{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+	ref, err := domain.NewTableRef(schemaNamespace(profile), table)
+	if err != nil {
+		return domain.TableStructure{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	credential, found, err := u.repository.GetCredential(profile.ID)
+	if err != nil {
+		return domain.TableStructure{}, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+	if !found {
+		return domain.TableStructure{}, apperr.Wrap(apperr.CodeCredentialUnavailable, errors.New("credential not found"))
+	}
+
+	structure, err := u.repository.InspectTableStructure(ctx, profile, credential, ref)
+	if err != nil {
+		return domain.TableStructure{}, apperr.Wrap(apperr.CodeSchemaLoadFailed, err)
+	}
+	if err := structure.Validate(ref); err != nil {
+		return domain.TableStructure{}, apperr.Wrap(apperr.CodeSchemaLoadFailed, err)
+	}
+
+	return structure, nil
+}
+
 // 対象名前空間取得
 func schemaNamespace(profile domain.Profile) string {
 	if profile.DBType == domain.DBTypeMySQL {
