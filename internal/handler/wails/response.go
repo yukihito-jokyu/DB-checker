@@ -164,6 +164,21 @@ type ListTableRowsRequest struct {
 	Filter *FilterGroupRequest `json:"filter"`
 }
 
+type ColumnValueInputRequest struct {
+	Column string  `json:"column"`
+	Kind   string  `json:"kind"`
+	Value  *string `json:"value,omitempty"`
+}
+
+type InsertTableRowRequest struct {
+	Table  string                    `json:"table"`
+	Values []ColumnValueInputRequest `json:"values"`
+}
+
+type AffectedRowsResponse struct {
+	AffectedRows int64 `json:"affectedRows"`
+}
+
 type TableCellResponse struct {
 	Kind  string `json:"kind"`
 	Value string `json:"value,omitempty"`

@@ -13,6 +13,8 @@ var ErrInvalidTableQuery = errors.New("invalid table query")
 
 var ErrInvalidTableFilter = errors.New("invalid table filter")
 
+var ErrInvalidRowInput = errors.New("invalid row input")
+
 const TablePageSize = 100
 
 type SortDirection string
@@ -73,13 +75,29 @@ type TableQuery struct {
 type CellKind string
 
 const (
-	CellKindNull  CellKind = "null"
-	CellKindValue CellKind = "value"
+	CellKindNull    CellKind = "null"
+	CellKindValue   CellKind = "value"
+	CellKindDefault CellKind = "default"
 )
 
 type CellValue struct {
 	Kind  CellKind
 	Value string
+}
+
+type ColumnValueInput struct {
+	Column string
+	Kind   CellKind
+	Value  *string
+}
+
+type InsertRow struct {
+	Table  TableRef
+	Values []ColumnValueInput
+}
+
+type AffectedRows struct {
+	AffectedRows int64
 }
 
 type TableRow struct{ Cells []CellValue }
@@ -387,6 +405,59 @@ func validateColumns(columns []Column) error {
 			return fmt.Errorf("%w: duplicate column", ErrInvalidSchema)
 		}
 		names[column.Name] = struct{}{}
+	}
+
+	return nil
+}
+
+// 行追加入力検証
+func (r InsertRow) Validate(columns []Column) error {
+	if _, err := NewTableRef(r.Table.Namespace, r.Table.Name); err != nil || len(columns) == 0 {
+		return ErrInvalidRowInput
+	}
+
+	colMap := make(map[string]Column, len(columns))
+	for _, col := range columns {
+		if col.Name == "" {
+			return ErrInvalidRowInput
+		}
+		colMap[col.Name] = col
+	}
+
+	provided := make(map[string]ColumnValueInput, len(r.Values))
+	for _, val := range r.Values {
+		col, found := colMap[val.Column]
+		if !found {
+			return ErrInvalidRowInput
+		}
+		if _, duplicate := provided[val.Column]; duplicate {
+			return ErrInvalidRowInput
+		}
+
+		switch val.Kind {
+		case CellKindNull:
+			if !col.Nullable {
+				return ErrInvalidRowInput
+			}
+		case CellKindValue:
+			if val.Value == nil {
+				return ErrInvalidRowInput
+			}
+		case CellKindDefault:
+		default:
+			return ErrInvalidRowInput
+		}
+
+		provided[val.Column] = val
+	}
+
+	for _, col := range columns {
+		if !col.Nullable && col.DefaultValue == nil && !col.IsGenerated {
+			input, found := provided[col.Name]
+			if !found || input.Kind == CellKindDefault || input.Kind == CellKindNull {
+				return ErrInvalidRowInput
+			}
+		}
 	}
 
 	return nil

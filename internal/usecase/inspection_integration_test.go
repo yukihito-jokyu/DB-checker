@@ -179,13 +179,134 @@ func TestAppUseCaseListTableRowsIntegration(t *testing.T) {
 				wantCode    apperr.Code
 				verifyTypes bool
 			}{
-				{name: "主キーの降順を返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_child"}, Page: 1, Sort: &domain.TableSort{Column: "id", Direction: domain.SortDirectionDescending}}, wantCount: 3, wantRows: 3},
-				{name: "ANDフィルターを返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_child"}, Page: 1, Filter: &domain.FilterGroup{Operator: domain.FilterGroupOperatorAnd, Filters: []domain.TableFilter{{Column: "status", Operator: domain.FilterOperatorEqual, Values: []string{"open"}}, {Column: "id", Operator: domain.FilterOperatorGreater, Values: []string{"1"}}}}}, wantCount: 1, wantRows: 1},
-				{name: "ORフィルターを返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_child"}, Page: 1, Filter: &domain.FilterGroup{Operator: domain.FilterGroupOperatorOr, Filters: []domain.TableFilter{{Column: "status", Operator: domain.FilterOperatorEqual, Values: []string{"closed"}}, {Column: "note", Operator: domain.FilterOperatorIsNull}}}}, wantCount: 2, wantRows: 2},
-				{name: "主キーなしの100件ページを返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 1}, wantCount: 101, wantRows: 100},
-				{name: "NULLとJSONとバイナリーと日時を返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 1, Sort: &domain.TableSort{Column: "id", Direction: domain.SortDirectionAscending}}, wantCount: 101, wantRows: 100, verifyTypes: true},
-				{name: "最終ページ超過に空行を返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 3, Sort: &domain.TableSort{Column: "id", Direction: domain.SortDirectionAscending}}, wantCount: 101, wantRows: 0},
-				{name: "JSONのLIKEを適用失敗として返す", query: domain.TableQuery{Table: domain.TableRef{Name: "schema_row_values"}, Page: 1, Filter: &domain.FilterGroup{Operator: domain.FilterGroupOperatorAnd, Filters: []domain.TableFilter{{Column: "metadata", Operator: domain.FilterOperatorLike, Values: []string{"%key%"}}}}}, wantCode: apperr.CodeFilterApplyFailed},
+				{
+					name: "主キーの降順を返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_child",
+						},
+						Page: 1,
+						Sort: &domain.TableSort{
+							Column:    "id",
+							Direction: domain.SortDirectionDescending,
+						},
+					},
+					wantCount: 3,
+					wantRows:  3,
+				},
+				{
+					name: "ANDフィルターを返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_child",
+						},
+						Page: 1,
+						Filter: &domain.FilterGroup{
+							Operator: domain.FilterGroupOperatorAnd,
+							Filters: []domain.TableFilter{
+								{
+									Column:   "status",
+									Operator: domain.FilterOperatorEqual,
+									Values:   []string{"open"},
+								},
+								{
+									Column:   "id",
+									Operator: domain.FilterOperatorGreater,
+									Values:   []string{"1"},
+								},
+							},
+						},
+					},
+					wantCount: 1,
+					wantRows:  1,
+				},
+				{
+					name: "ORフィルターを返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_child",
+						},
+						Page: 1,
+						Filter: &domain.FilterGroup{
+							Operator: domain.FilterGroupOperatorOr,
+							Filters: []domain.TableFilter{
+								{
+									Column:   "status",
+									Operator: domain.FilterOperatorEqual,
+									Values:   []string{"closed"},
+								},
+								{
+									Column:   "note",
+									Operator: domain.FilterOperatorIsNull,
+								},
+							},
+						},
+					},
+					wantCount: 2,
+					wantRows:  2,
+				},
+				{
+					name: "主キーなしの100件ページを返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_row_values",
+						},
+						Page: 1,
+					},
+					wantCount: 101,
+					wantRows:  100,
+				},
+				{
+					name: "NULLとJSONとバイナリーと日時を返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_row_values",
+						},
+						Page: 1,
+						Sort: &domain.TableSort{
+							Column:    "id",
+							Direction: domain.SortDirectionAscending,
+						},
+					},
+					wantCount:   101,
+					wantRows:    100,
+					verifyTypes: true,
+				},
+				{
+					name: "最終ページ超過に空行を返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_row_values",
+						},
+						Page: 3,
+						Sort: &domain.TableSort{
+							Column:    "id",
+							Direction: domain.SortDirectionAscending,
+						},
+					},
+					wantCount: 101,
+					wantRows:  0,
+				},
+				{
+					name: "JSONのLIKEを適用失敗として返す",
+					query: domain.TableQuery{
+						Table: domain.TableRef{
+							Name: "schema_row_values",
+						},
+						Page: 1,
+						Filter: &domain.FilterGroup{
+							Operator: domain.FilterGroupOperatorAnd,
+							Filters: []domain.TableFilter{
+								{
+									Column:   "metadata",
+									Operator: domain.FilterOperatorLike,
+									Values:   []string{"%key%"},
+								},
+							},
+						},
+					},
+					wantCode: apperr.CodeFilterApplyFailed,
+				},
 			}
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
@@ -209,6 +330,82 @@ func TestAppUseCaseListTableRowsIntegration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// テーブル行追加結合検証
+func TestAppUseCaseInsertTableRowIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			database := integrationDatabase(t, target)
+			defer database.Close()
+			adminDatabase := integrationAdminDatabase(t, target)
+			if adminDatabase != nil {
+				defer adminDatabase.Close()
+			}
+			defer integrationSchemaCleanup(t, database, adminDatabase, target.Kind)
+			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
+
+			appRepository, _, _ := integrationInspectionRepository(t, target)
+			useCase := NewAppUseCase(appRepository)
+
+			name := "Inserted User"
+			row := domain.InsertRow{
+				Table: domain.TableRef{Name: "schema_child"},
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindDefault,
+					},
+					{
+						Column: "parent_a",
+						Kind:   domain.CellKindValue,
+						Value:  integrationStringPtr("1"),
+					},
+					{
+						Column: "parent_b",
+						Kind:   domain.CellKindValue,
+						Value:  integrationStringPtr("10"),
+					},
+					{
+						Column: "status",
+						Kind:   domain.CellKindValue,
+						Value:  &name,
+					},
+					{
+						Column: "note",
+						Kind:   domain.CellKindNull,
+					},
+					{
+						Column: "metadata",
+						Kind:   domain.CellKindValue,
+						Value:  integrationStringPtr(`{"new": true}`),
+					},
+				},
+			}
+
+			// parent 行を事前に投入
+			if _, err := database.Exec("INSERT INTO schema_parent (part_a, part_b, code) VALUES (1, 10, 'parent-a')"); err != nil {
+				t.Fatalf("Exec parent seed error = %v", err)
+			}
+
+			affected, err := useCase.InsertTableRow(context.Background(), row)
+			if err != nil {
+				t.Fatalf("InsertTableRow() error = %v", err)
+			}
+			if affected.AffectedRows != 1 {
+				t.Errorf("AffectedRows = %d, want 1", affected.AffectedRows)
+			}
+		})
+	}
+}
+
+// 検証用文字列ポインター取得
+func integrationStringPtr(value string) *string {
+	return &value
 }
 
 // 行値種別検証

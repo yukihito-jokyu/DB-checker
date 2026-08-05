@@ -993,3 +993,157 @@ func TestValidateColumns(t *testing.T) {
 		})
 	}
 }
+
+// 行追加入力検証テスト
+func TestInsertRowValidate(t *testing.T) {
+	t.Parallel()
+
+	valStr := "test"
+	cols := []Column{
+		{
+			Name:         "id",
+			DataType:     "int",
+			Nullable:     false,
+			DefaultValue: nil,
+			IsPrimaryKey: true,
+			IsGenerated:  true,
+		},
+		{
+			Name:         "name",
+			DataType:     "varchar(255)",
+			Nullable:     false,
+			DefaultValue: nil,
+		},
+		{
+			Name:         "age",
+			DataType:     "int",
+			Nullable:     true,
+			DefaultValue: nil,
+		},
+		{
+			Name:         "created_at",
+			DataType:     "datetime",
+			Nullable:     false,
+			DefaultValue: &valStr,
+		},
+	}
+
+	tests := []struct {
+		name    string
+		row     InsertRow
+		wantErr error
+	}{
+		{
+			name: "正常な入力値を検証できる",
+			row: InsertRow{
+				Table: TableRef{Namespace: "main", Name: "users"},
+				Values: []ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   CellKindDefault,
+					},
+					{
+						Column: "name",
+						Kind:   CellKindValue,
+						Value:  &valStr,
+					},
+					{
+						Column: "age",
+						Kind:   CellKindNull,
+					},
+					{
+						Column: "created_at",
+						Kind:   CellKindDefault,
+					},
+				},
+			},
+			wantErr: nil,
+		},
+		{
+			name: "無効なテーブル参照を拒否する",
+			row: InsertRow{
+				Table: TableRef{Namespace: "", Name: "users"},
+				Values: []ColumnValueInput{
+					{
+						Column: "name",
+						Kind:   CellKindValue,
+						Value:  &valStr,
+					},
+				},
+			},
+			wantErr: ErrInvalidRowInput,
+		},
+		{
+			name: "存在しないカラム名を拒否する",
+			row: InsertRow{
+				Table: TableRef{Namespace: "main", Name: "users"},
+				Values: []ColumnValueInput{
+					{
+						Column: "unknown",
+						Kind:   CellKindValue,
+						Value:  &valStr,
+					},
+				},
+			},
+			wantErr: ErrInvalidRowInput,
+		},
+		{
+			name: "NOT NULLカラムへのNULL出力を拒否する",
+			row: InsertRow{
+				Table: TableRef{Namespace: "main", Name: "users"},
+				Values: []ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   CellKindDefault,
+					},
+					{
+						Column: "name",
+						Kind:   CellKindNull,
+					},
+				},
+			},
+			wantErr: ErrInvalidRowInput,
+		},
+		{
+			name: "必須カラム未指定を拒否する",
+			row: InsertRow{
+				Table: TableRef{Namespace: "main", Name: "users"},
+				Values: []ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   CellKindDefault,
+					},
+					{
+						Column: "age",
+						Kind:   CellKindNull,
+					},
+				},
+			},
+			wantErr: ErrInvalidRowInput,
+		},
+		{
+			name: "CellKindValueでのnil値を拒否する",
+			row: InsertRow{
+				Table: TableRef{Namespace: "main", Name: "users"},
+				Values: []ColumnValueInput{
+					{Column: "name", Kind: CellKindValue, Value: nil},
+				},
+			},
+			wantErr: ErrInvalidRowInput,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.row.Validate(cols)
+			if (err != nil) != (tt.wantErr != nil) {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Validate() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}

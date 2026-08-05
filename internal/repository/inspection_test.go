@@ -85,6 +85,30 @@ func (c *inspectionTestConnection) QueryContext(_ context.Context, query string,
 	return &inspectionTestRows{response: response, errorAt: response.errorAt}, nil
 }
 
+// テスト用更新実行
+func (c *inspectionTestConnection) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.scenario.mu.Lock()
+	defer c.scenario.mu.Unlock()
+
+	if len(c.scenario.responses) == 0 {
+		return nil, fmt.Errorf("unexpected exec: %s", query)
+	}
+
+	response := c.scenario.responses[0]
+	c.scenario.responses = c.scenario.responses[1:]
+	if response.query != query {
+		return nil, fmt.Errorf("query = %q, want %q", query, response.query)
+	}
+	if response.err != nil {
+		return nil, response.err
+	}
+	if response.after != nil {
+		response.after()
+	}
+
+	return driver.RowsAffected(response.execAffected), nil
+}
+
 // テスト用接続確認
 func (*inspectionTestConnection) Ping(context.Context) error { return nil }
 
@@ -94,13 +118,14 @@ type inspectionTestScenario struct {
 }
 
 type inspectionTestResponse struct {
-	query   string
-	columns []string
-	values  [][]driver.Value
-	err     error
-	rowErr  error
-	errorAt int
-	after   func()
+	query        string
+	columns      []string
+	values       [][]driver.Value
+	execAffected int64
+	err          error
+	rowErr       error
+	errorAt      int
+	after        func()
 }
 
 type inspectionTestRows struct {
@@ -880,11 +905,34 @@ func TestInspectTableStructure(t *testing.T) {
 				},
 			},
 			want: domain.TableStructure{
-				Table:       domain.Table{Namespace: "public", Name: "items", Columns: []domain.Column{{Name: "id", DataType: "int4", DefaultValue: &defaultValue, IsGenerated: true, IsPrimaryKey: true, IsUnique: true}}},
+				Table: domain.Table{
+					Namespace: "public",
+					Name:      "items",
+					Columns: []domain.Column{
+						{
+							Name:         "id",
+							DataType:     "int4",
+							DefaultValue: &defaultValue,
+							IsGenerated:  true,
+							IsPrimaryKey: true,
+							IsUnique:     true,
+						},
+					},
+				},
 				ForeignKeys: []domain.ForeignKey{},
 				Indexes: []domain.Index{
-					{Name: "items_name_key", Columns: []string{"name"}, Unique: true, Kind: "btree"},
-					{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"},
+					{
+						Name:    "items_name_key",
+						Columns: []string{"name"},
+						Unique:  true,
+						Kind:    "btree",
+					},
+					{
+						Name:    "items_pkey",
+						Columns: []string{"id"},
+						Unique:  true,
+						Kind:    "btree",
+					},
 				},
 			},
 		},
@@ -1159,8 +1207,20 @@ func TestInspectForeignKeys(t *testing.T) {
 				errorAt: -1,
 			},
 			want: []domain.ForeignKey{
-				{Name: "fk_items_orders", FromTable: "items", FromColumns: []string{"order_id"}, ToTable: "orders", ToColumns: []string{"id"}},
-				{Name: "fk_orders_users", FromTable: "orders", FromColumns: []string{"tenant_id", "user_id"}, ToTable: "users", ToColumns: []string{"tenant_id", "id"}},
+				{
+					Name:        "fk_items_orders",
+					FromTable:   "items",
+					FromColumns: []string{"order_id"},
+					ToTable:     "orders",
+					ToColumns:   []string{"id"},
+				},
+				{
+					Name:        "fk_orders_users",
+					FromTable:   "orders",
+					FromColumns: []string{"tenant_id", "user_id"},
+					ToTable:     "users",
+					ToColumns:   []string{"tenant_id", "id"},
+				},
 			},
 		},
 		{
@@ -2160,6 +2220,480 @@ func TestAppRepositoryListRows(t *testing.T) {
 			}
 			if got.TotalCount != tt.wantCount {
 				t.Errorf("ListRows() TotalCount = %d, want %d", got.TotalCount, tt.wantCount)
+			}
+		})
+	}
+}
+
+// 入力値変換テスト
+func TestConvertInputValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		value    string
+		dataType string
+		wantErr  bool
+	}{
+		{
+			name:     "テキスト値をそのまま返す",
+			value:    "hello",
+			dataType: "varchar(255)",
+			wantErr:  false,
+		},
+		{
+			name:     "正常なBase64バイナリー値を変換する",
+			value:    "SGVsbG8=",
+			dataType: "blob",
+			wantErr:  false,
+		},
+		{
+			name:     "不正なBase64バイナリー値を拒否する",
+			value:    "invalid-base64!!!",
+			dataType: "bytea",
+			wantErr:  true,
+		},
+		{
+			name:     "正常なJSON値を検証・返却する",
+			value:    `{"a": 1}`,
+			dataType: "json",
+			wantErr:  false,
+		},
+		{
+			name:     "不正なJSON値を拒否する",
+			value:    `{invalid json}`,
+			dataType: "json",
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := convertInputValue(tt.value, tt.dataType)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("convertInputValue() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// テーブル行追加リポジトリ検証
+func TestAppRepositoryInsertRow(t *testing.T) {
+	profile := connectionTestProfile(t, domain.DBTypePostgres)
+	ref := domain.TableRef{Namespace: "public", Name: "items"}
+	valStr := "Item-1"
+	valInvalid := "invalid-base64!!!"
+	row := domain.InsertRow{
+		Table: ref,
+		Values: []domain.ColumnValueInput{
+			{
+				Column: "id",
+				Kind:   domain.CellKindDefault,
+			},
+			{
+				Column: "name",
+				Kind:   domain.CellKindValue,
+				Value:  &valStr,
+			},
+		},
+	}
+	originalOpenDatabase := openDatabase
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+
+	tests := []struct {
+		name      string
+		open      func(string, string) (*sql.DB, error)
+		useMySQL  bool
+		customRow *domain.InsertRow
+		ctx       context.Context
+		wantError string
+		want      domain.AffectedRows
+	}{
+		{
+			name: "DB接続失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			ctx:       context.Background(),
+			wantError: "open failed",
+		},
+		{
+			name: "Ping失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, nil)
+
+				return database, nil
+			},
+			ctx:       canceledInspectionContext(),
+			wantError: context.Canceled.Error(),
+		},
+		{
+			name: "正常に行を追加して影響行数を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+							{"name", "text", false, nil, false, false, false, false},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:        `INSERT INTO "public"."items" ("name") VALUES ($1)`,
+						execAffected: 1,
+						errorAt:      -1,
+					},
+				})
+
+				return database, nil
+			},
+			ctx:  context.Background(),
+			want: domain.AffectedRows{AffectedRows: 1},
+		},
+		{
+			name: "テーブル構造取得失敗エラーを返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query: postgresTableStructureColumnQuery,
+						err:   errors.New("table structure query error"),
+					},
+				})
+
+				return database, nil
+			},
+			ctx:       context.Background(),
+			wantError: "table structure query error",
+		},
+		{
+			name: "未知のカラム指定エラーを返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+				})
+
+				return database, nil
+			},
+			ctx:       context.Background(),
+			wantError: "unknown column",
+		},
+		{
+			name: "CellKindValueでのnilポインターエラーを返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+							{"name", "text", false, nil, false, false, false, false},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+				})
+
+				return database, nil
+			},
+			customRow: &domain.InsertRow{
+				Table: ref,
+				Values: []domain.ColumnValueInput{
+					{Column: "name", Kind: domain.CellKindValue, Value: nil},
+				},
+			},
+			ctx:       context.Background(),
+			wantError: "missing value for column",
+		},
+		{
+			name: "PostgreSQL全デフォルト値INSERT文を生成する",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:        `INSERT INTO "public"."items" DEFAULT VALUES`,
+						execAffected: 1,
+						errorAt:      -1,
+					},
+				})
+
+				return database, nil
+			},
+			customRow: &domain.InsertRow{
+				Table: ref,
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindDefault,
+					},
+				},
+			},
+			ctx:  context.Background(),
+			want: domain.AffectedRows{AffectedRows: 1},
+		},
+		{
+			name: "MySQL全デフォルト値INSERT文を生成する",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   mysqlTableStructureColumnQuery,
+						columns: []string{"column_name", "column_type", "is_nullable", "column_default", "extra", "column_key", "is_foreign", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int", false, nil, true, true, false, true},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   mysqlTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   mysqlTableStructureIndexQuery,
+						columns: []string{"index_name", "column_name", "non_unique", "index_type"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:        "INSERT INTO `app`.`items` () VALUES ()",
+						execAffected: 1,
+						errorAt:      -1,
+					},
+				})
+
+				return database, nil
+			},
+			useMySQL: true,
+			customRow: &domain.InsertRow{
+				Table: domain.TableRef{
+					Namespace: "app",
+					Name:      "items",
+				},
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindDefault,
+					},
+				},
+			},
+			ctx:  context.Background(),
+			want: domain.AffectedRows{AffectedRows: 1},
+		},
+		{
+			name: "CellKindNullの入力値を扱える",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+							{"name", "text", true, nil, false, false, false, false},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:        `INSERT INTO "public"."items" ("name") VALUES ($1)`,
+						execAffected: 1,
+						errorAt:      -1,
+					},
+				})
+
+				return database, nil
+			},
+			customRow: &domain.InsertRow{
+				Table: ref,
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "name",
+						Kind:   domain.CellKindNull,
+					},
+				},
+			},
+			ctx:  context.Background(),
+			want: domain.AffectedRows{AffectedRows: 1},
+		},
+		{
+			name: "入力値変換失敗エラーを返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+							{"data", "bytea", false, nil, false, false, false, false},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+				})
+
+				return database, nil
+			},
+			customRow: &domain.InsertRow{
+				Table: ref,
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "data",
+						Kind:   domain.CellKindValue,
+						Value:  &valInvalid,
+					},
+				},
+			},
+			ctx:       context.Background(),
+			wantError: "invalid base64 value for binary column",
+		},
+		{
+			name: "Exec実行エラーを返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, []inspectionTestResponse{
+					{
+						query:   postgresTableStructureColumnQuery,
+						columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"},
+						values: [][]driver.Value{
+							{"id", "int4", false, nil, true, true, false, true},
+							{"name", "text", false, nil, false, false, false, false},
+						},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureForeignKeyQuery,
+						columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query:   postgresTableStructureIndexQuery,
+						columns: []string{"relname", "attname", "indisunique", "amname"},
+						values:  [][]driver.Value{},
+						errorAt: -1,
+					},
+					{
+						query: `INSERT INTO "public"."items" ("name") VALUES ($1)`,
+						err:   errors.New("exec error"),
+					},
+				})
+
+				return database, nil
+			},
+			ctx:       context.Background(),
+			wantError: "exec error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openDatabase = tt.open
+			targetProfile := profile
+			if tt.useMySQL {
+				targetProfile = connectionTestProfile(t, domain.DBTypeMySQL)
+			}
+			targetRow := row
+			if tt.customRow != nil {
+				targetRow = *tt.customRow
+			}
+			got, err := NewAppRepository(nil).InsertRow(tt.ctx, targetProfile, "secret", targetRow.Table, targetRow)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Errorf("InsertRow() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("InsertRow() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("InsertRow() = %#v, want %#v", got, tt.want)
 			}
 		})
 	}

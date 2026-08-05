@@ -103,7 +103,16 @@ func NewProfile(id, name string, dbType DBType, host string, port int, database,
 		return Profile{}, ErrInvalidProfile
 	}
 
-	return Profile{ID: id, Name: name, DBType: dbType, Host: host, Port: port, Database: database, Schema: schema, User: user}, nil
+	return Profile{
+		ID:       id,
+		Name:     name,
+		DBType:   dbType,
+		Host:     host,
+		Port:     port,
+		Database: database,
+		Schema:   schema,
+		User:     user,
+	}, nil
 }
 
 // アクティブプロファイル検証

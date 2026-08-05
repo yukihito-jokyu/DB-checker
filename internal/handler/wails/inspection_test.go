@@ -35,6 +35,8 @@ type schemaRepositoryStub struct {
 	rowsErr         error
 	flowState       domain.FlowState
 	flowStateErr    error
+	affectedRows    domain.AffectedRows
+	insertRowErr    error
 }
 
 // プロファイル読込再現
@@ -91,6 +93,11 @@ func (s *schemaRepositoryStub) InspectTableStatistics(ctx context.Context, profi
 // テーブル行一覧再現
 func (s *schemaRepositoryStub) ListRows(context.Context, domain.Profile, string, domain.TableQuery) (domain.TableRows, error) {
 	return s.rows, s.rowsErr
+}
+
+// テーブル行追加再現
+func (s *schemaRepositoryStub) InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error) {
+	return s.affectedRows, s.insertRowErr
 }
 
 // データベーススキーマ取得レスポンス検証
@@ -210,13 +217,43 @@ func TestAppHandlerGetTableStructure(t *testing.T) {
 	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
 	defaultValue := "generated default"
 	structure := domain.TableStructure{
-		Table:   domain.Table{Namespace: "public", Name: "items", Columns: []domain.Column{{Name: "id", DataType: "int4", DefaultValue: &defaultValue, IsPrimaryKey: true, IsUnique: true, IsGenerated: true}}},
-		Indexes: []domain.Index{{Name: "items_pkey", Columns: []string{"id"}, Unique: true, Kind: "btree"}},
+		Table: domain.Table{
+			Namespace: "public",
+			Name:      "items",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					DefaultValue: &defaultValue,
+					IsPrimaryKey: true,
+					IsUnique:     true,
+					IsGenerated:  true,
+				},
+			},
+		},
+		ForeignKeys: []domain.ForeignKey{
+			{
+				Name:        "fk_items_parent",
+				FromTable:   "items",
+				FromColumns: []string{"parent_id"},
+				ToTable:     "parents",
+				ToColumns:   []string{"id"},
+			},
+		},
+		Indexes: []domain.Index{
+			{
+				Name:    "items_pkey",
+				Columns: []string{"id"},
+				Unique:  true,
+				Kind:    "btree",
+			},
+		},
 	}
 	tests := []struct {
 		name       string
 		table      string
 		repository schemaRepositoryStub
+		nilUseCase bool
 		wantCode   apperr.Code
 		wantData   bool
 		wantLog    bool
@@ -246,12 +283,23 @@ func TestAppHandlerGetTableStructure(t *testing.T) {
 			wantCode: apperr.CodeSchemaLoadFailed,
 			wantLog:  true,
 		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			table:      "items",
+			nilUseCase: true,
+			wantCode:   apperr.CodeSchemaLoadFailed,
+			wantLog:    true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var output bytes.Buffer
 			logger := applogger.NewWithWriter(&output, slog.LevelDebug)
-			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), usecase.NewAppUseCase(&tt.repository))
+			var appUseCase *usecase.AppUseCase
+			if !tt.nilUseCase {
+				appUseCase = usecase.NewAppUseCase(&tt.repository)
+			}
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
 			got := handler.GetTableStructure(tt.table)
 			if tt.wantData {
 				if got.Data == nil {
@@ -301,6 +349,16 @@ func TestAppHandlerGetTableStatistics(t *testing.T) {
 			DuplicateCount: domain.StatisticCount{Status: domain.StatisticsStatusUnavailable, Reason: stringPointer("not collected")},
 			Min:            domain.StatisticValue{Value: &minimum, Status: domain.StatisticsStatusComplete},
 			Max:            domain.StatisticValue{Status: domain.StatisticsStatusUnavailable, Reason: stringPointer("unsupported data type")},
+		}},
+		ForeignKeys: []domain.ForeignKeyStatistics{{
+			Name:                  "fk_items_parent",
+			FromColumns:           []string{"parent_id"},
+			ToTable:               "parents",
+			ToColumns:             []string{"id"},
+			SourceRowCount:        domain.StatisticCount{Value: &rowCount, Status: domain.StatisticsStatusComplete},
+			NullCount:             domain.StatisticCount{Value: &nullCount, Status: domain.StatisticsStatusComplete},
+			ReferencedRowCount:    domain.StatisticCount{Value: &rowCount, Status: domain.StatisticsStatusComplete},
+			MissingReferenceCount: domain.StatisticCount{Value: &nullCount, Status: domain.StatisticsStatusComplete},
 		}},
 	}
 	tests := []struct {
@@ -435,17 +493,95 @@ func TestAppHandlerListTableRows(t *testing.T) {
 			TotalCount: 1,
 			Page:       1,
 			PageSize:   domain.TablePageSize,
+			Sort: &domain.TableSort{
+				Column:    "id",
+				Direction: domain.SortDirectionAscending,
+			},
+			Filter: &domain.FilterGroup{
+				Operator: domain.FilterGroupOperatorAnd,
+				Filters: []domain.TableFilter{
+					{
+						Column:   "id",
+						Operator: domain.FilterOperatorEqual,
+						Values:   []string{"1"},
+					},
+				},
+				Groups: []domain.FilterGroup{
+					{
+						Operator: domain.FilterGroupOperatorOr,
+						Filters: []domain.TableFilter{
+							{
+								Column:   "id",
+								Operator: domain.FilterOperatorEqual,
+								Values:   []string{"2"},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 	tests := []struct {
-		name     string
-		request  ListTableRowsRequest
-		wantCode apperr.Code
-		wantData bool
+		name       string
+		request    ListTableRowsRequest
+		customRows *domain.TableRows
+		nilUseCase bool
+		wantCode   apperr.Code
+		wantData   bool
 	}{
 		{
 			name:     "行DTOを返す",
 			request:  ListTableRowsRequest{Table: "items", Page: 1},
+			wantData: true,
+		},
+		{
+			name: "SortおよびFilterがnilの行DTOを返す",
+			request: ListTableRowsRequest{
+				Table: "items",
+				Page:  1,
+			},
+			customRows: &domain.TableRows{
+				Rows: []domain.TableRow{
+					{Cells: []domain.CellValue{
+						{Kind: domain.CellKindValue, Value: "1"},
+						{Kind: domain.CellKindValue, Value: `{"key":"value"}`},
+					}},
+				},
+				TotalCount: 1,
+				Page:       1,
+				PageSize:   domain.TablePageSize,
+			},
+			wantData: true,
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			request:    ListTableRowsRequest{Table: "items", Page: 1},
+			nilUseCase: true,
+			wantCode:   apperr.CodeDataLoadFailed,
+		},
+		{
+			name: "ネストされたフィルターグループと並び替えを入力として処理できる",
+			request: ListTableRowsRequest{
+				Table: "items",
+				Page:  1,
+				Sort:  &TableSortRequest{Column: "id", Direction: "asc"},
+				Filter: &FilterGroupRequest{
+					Operator: "and",
+					Filters: []TableFilterRequest{{
+						Column:   "id",
+						Operator: "=",
+						Values:   []string{"1"},
+					}},
+					Groups: []FilterGroupRequest{{
+						Operator: "or",
+						Filters: []TableFilterRequest{{
+							Column:   "id",
+							Operator: "=",
+							Values:   []string{"2"},
+						}},
+					}},
+				},
+			},
 			wantData: true,
 		},
 		{
@@ -486,7 +622,14 @@ func TestAppHandlerListTableRows(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := baseRepository
-			handler := NewAppHandler(applogger.NewWithWriter(io.Discard, slog.LevelDebug), config.NewStore(t.TempDir()), usecase.NewAppUseCase(&repository))
+			if tt.customRows != nil {
+				repository.rows = *tt.customRows
+			}
+			var appUseCase *usecase.AppUseCase
+			if !tt.nilUseCase {
+				appUseCase = usecase.NewAppUseCase(&repository)
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(io.Discard, slog.LevelDebug), config.NewStore(t.TempDir()), appUseCase)
 			got := handler.ListTableRows(tt.request)
 			if gotCode := tableRowsResponseErrorCode(got.Error); gotCode != tt.wantCode {
 				t.Errorf("ListTableRows() error code = %q, want %q", gotCode, tt.wantCode)
@@ -558,4 +701,107 @@ func assertSafeSchemaFailureLog(t *testing.T, output string) {
 // 文字列スライス一致判定
 func equalStringSlices(left, right []string) bool {
 	return reflect.DeepEqual(left, right)
+}
+
+// テーブル行追加ハンドラーレスポンス検証
+func TestAppHandlerInsertTableRow(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	valStr := "Alice"
+	structure := domain.TableStructure{
+		Table: domain.Table{
+			Namespace: profile.Schema,
+			Name:      "users",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					Nullable:     false,
+					IsPrimaryKey: true,
+					IsGenerated:  true,
+				},
+				{
+					Name:     "name",
+					DataType: "text",
+					Nullable: false,
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		repository *schemaRepositoryStub
+		request    InsertTableRowRequest
+		want       Response[AffectedRowsResponse]
+	}{
+		{
+			name: "正常に行を追加できる",
+			repository: &schemaRepositoryStub{
+				profile:         profile,
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				affectedRows:    domain.AffectedRows{AffectedRows: 1},
+			},
+			request: InsertTableRowRequest{
+				Table: "users",
+				Values: []ColumnValueInputRequest{
+					{
+						Column: "id",
+						Kind:   "default",
+					},
+					{
+						Column: "name",
+						Kind:   "value",
+						Value:  &valStr,
+					},
+				},
+			},
+			want: OK(AffectedRowsResponse{AffectedRows: 1}),
+		},
+		{
+			name: "ユースケース未初期化時はROW_ADD_FAILEDを返す",
+			repository: &schemaRepositoryStub{
+				profile:  profile,
+				activeID: &profile.ID,
+			},
+			request: InsertTableRowRequest{
+				Table: "users",
+			},
+			want: Fail[AffectedRowsResponse](apperr.New(apperr.CodeRowAddFailed)),
+		},
+		{
+			name: "バリデーションエラー時はVALIDATION_FAILEDを返す",
+			repository: &schemaRepositoryStub{
+				profile:         profile,
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+			},
+			request: InsertTableRowRequest{
+				Table: "users",
+				Values: []ColumnValueInputRequest{
+					{Column: "name", Kind: "null"},
+				},
+			},
+			want: Fail[AffectedRowsResponse](apperr.New(apperr.CodeValidationFailed)),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := applogger.NewWithWriter(io.Discard, slog.LevelDebug)
+			var appUseCase *usecase.AppUseCase
+			if tt.name != "ユースケース未初期化時はROW_ADD_FAILEDを返す" {
+				appUseCase = usecase.NewAppUseCase(tt.repository)
+			}
+			handler := NewAppHandler(logger, config.NewStore(t.TempDir()), appUseCase)
+			got := handler.InsertTableRow(tt.request)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("InsertTableRow() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
 }
