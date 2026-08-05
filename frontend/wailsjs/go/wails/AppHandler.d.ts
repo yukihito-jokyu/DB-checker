@@ -14,6 +14,8 @@ export function GetDatabaseSchema():Promise<wails.Response_github_com_yukihito_j
 
 export function GetStatus():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_StatusResponse_>;
 
+export function GetTableStatistics(arg1:string):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStatisticsResponse_>;
+
 export function GetTableStructure(arg1:string):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStructureResponse_>;
 
 export function ListConnectionProfiles():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
