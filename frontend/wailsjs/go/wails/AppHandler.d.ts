@@ -18,6 +18,8 @@ export function GetTableStatistics(arg1:string):Promise<wails.Response_github_co
 
 export function GetTableStructure(arg1:string):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableStructureResponse_>;
 
+export function InsertTableRow(arg1:wails.InsertTableRowRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_AffectedRowsResponse_>;
+
 export function ListConnectionProfiles():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
 
 export function ListTableRows(arg1:wails.ListTableRowsRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_TableRowsResponse_>;

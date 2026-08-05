@@ -34,6 +34,10 @@ export function GetTableStructure(arg1) {
   return window['go']['wails']['AppHandler']['GetTableStructure'](arg1);
 }
 
+export function InsertTableRow(arg1) {
+  return window['go']['wails']['AppHandler']['InsertTableRow'](arg1);
+}
+
 export function ListConnectionProfiles() {
   return window['go']['wails']['AppHandler']['ListConnectionProfiles']();
 }
