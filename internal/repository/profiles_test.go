@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/yukihito-jokyu/DB-checker/internal/config"
@@ -209,6 +210,177 @@ func TestAppRepositorySaveProfiles(t *testing.T) {
 				t.Errorf("SaveProfiles() flow state = %q, want %q", got, tt.wantFlowState)
 			}
 		})
+	}
+}
+
+// フロー状態保存検証
+func TestAppRepositorySaveFlowState(t *testing.T) {
+	state := domain.FlowState{
+		Version: domain.FlowStateVersion,
+		TableStates: map[string]domain.TableFlowState{
+			"users": {X: 100.5, Y: -20, Expanded: true},
+		},
+	}
+	tests := []struct {
+		name          string
+		withoutConfig bool
+		wantErrorCode apperr.Code
+	}{
+		{
+			name: "対象プロファイルの状態だけを保存する",
+		},
+		{
+			name:          "設定未作成を保存失敗として返す",
+			withoutConfig: true,
+			wantErrorCode: apperr.CodeConfigNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := config.NewStore(t.TempDir())
+			if !tt.withoutConfig {
+				configuration := config.Default()
+				configuration.FlowStates["profile-2"] = json.RawMessage(`{"extension":{"keep":true}}`)
+				if err := store.Save(configuration); err != nil {
+					t.Fatalf("Save() error = %v", err)
+				}
+			}
+
+			err := NewAppRepository(store).SaveFlowState("profile-1", state)
+			if gotCode := errorCode(err); gotCode != tt.wantErrorCode {
+				t.Errorf("SaveFlowState() error code = %q, want %q", gotCode, tt.wantErrorCode)
+			}
+			if tt.wantErrorCode != "" {
+				return
+			}
+
+			result, err := store.Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got := decodeFlowState(result.Config.FlowStates["profile-1"]); !reflect.DeepEqual(got, state) {
+				t.Errorf("SaveFlowState() state = %#v, want %#v", got, state)
+			}
+			var gotExtension map[string]map[string]bool
+			if err := json.Unmarshal(result.Config.FlowStates["profile-2"], &gotExtension); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if got := gotExtension["extension"]["keep"]; !got {
+				t.Errorf("SaveFlowState() other profile state = %#v, want preserved", gotExtension)
+			}
+		})
+	}
+}
+
+// 設定更新直後の読込停止ストア
+type blockingConfigStore struct {
+	store       *config.Store
+	loadStarted chan struct{}
+	allowLoad   chan struct{}
+}
+
+// 設定読込
+func (s *blockingConfigStore) Load() (config.LoadResult, error) {
+	result, err := s.store.Load()
+	if err != nil {
+		return config.LoadResult{}, err
+	}
+
+	s.loadStarted <- struct{}{}
+	<-s.allowLoad
+
+	return result, nil
+}
+
+// 設定保存
+func (s *blockingConfigStore) Save(configuration config.Config) error {
+	return s.store.Save(configuration)
+}
+
+// 競合する設定更新検証
+func TestAppRepositorySaveConfigUpdatesConcurrently(t *testing.T) {
+	// 共有ロックの保持範囲と保存結果を一つのシナリオで検証するため、テーブル駆動にしない。
+	baseStore := config.NewStore(t.TempDir())
+	if err := baseStore.Save(config.Default()); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	store := &blockingConfigStore{
+		store:       baseStore,
+		loadStarted: make(chan struct{}, 2),
+		allowLoad:   make(chan struct{}),
+	}
+	repository := newAppRepository(store, nil)
+	state := domain.FlowState{
+		Version: domain.FlowStateVersion,
+		TableStates: map[string]domain.TableFlowState{
+			"users": {X: 100, Y: 200, Expanded: true},
+		},
+	}
+	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	activeID := "profile-1"
+
+	errs := make(chan error, 2)
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		errs <- repository.SaveFlowState("profile-1", state)
+	}()
+	<-store.loadStarted
+	if repository.configMu.TryLock() {
+		repository.configMu.Unlock()
+		t.Error("SaveFlowState() does not hold configMu while the configuration is loaded")
+	}
+
+	waitGroup.Add(1)
+	go func() {
+		defer waitGroup.Done()
+		errs <- repository.SaveProfiles([]domain.Profile{profile}, &activeID)
+	}()
+
+	store.allowLoad <- struct{}{}
+	<-store.loadStarted
+	if repository.configMu.TryLock() {
+		repository.configMu.Unlock()
+		t.Error("SaveProfiles() does not hold configMu while the configuration is loaded")
+	}
+	store.allowLoad <- struct{}{}
+
+	waitGroup.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("configuration update error = %v", err)
+		}
+	}
+
+	result, err := baseStore.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := decodeFlowState(result.Config.FlowStates["profile-1"]); !reflect.DeepEqual(got, state) {
+		t.Errorf("flow state = %#v, want %#v", got, state)
+	}
+	if want := []config.ConnectionProfile{{
+		ID:       profile.ID,
+		Name:     profile.Name,
+		DBType:   string(profile.DBType),
+		Host:     profile.Host,
+		Port:     profile.Port,
+		Database: profile.Database,
+		Schema:   profile.Schema,
+		User:     profile.User,
+	}}; !reflect.DeepEqual(result.Config.ConnectionProfiles, want) {
+		t.Errorf("connection profiles = %#v, want %#v", result.Config.ConnectionProfiles, want)
+	}
+	if got := result.Config.ActiveConnectionProfileID; got == nil || *got != activeID {
+		t.Errorf("active connection profile ID = %#v, want %q", got, activeID)
 	}
 }
 
