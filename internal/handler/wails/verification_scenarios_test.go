@@ -17,9 +17,14 @@ import (
 )
 
 type verificationScenarioHandlerProfilesStub struct {
-	profiles []domain.Profile
-	activeID *string
-	err      error
+	profiles        []domain.Profile
+	activeID        *string
+	err             error
+	credential      string
+	credentialFound bool
+	credentialErr   error
+	schema          domain.Schema
+	schemaErr       error
 }
 
 type verificationScenarioHandlerRepositoryStub struct {
@@ -56,9 +61,366 @@ type verificationScenarioHandlerWorkspaceStub struct {
 	deleteErr error
 }
 
+// 検証実行プレビュー要求検証
+func TestAppHandlerPreviewVerificationRunRejectsAmbiguousInput(t *testing.T) {
+	handler := NewAppHandler(
+		applogger.NewWithWriter(&bytes.Buffer{}, slog.LevelDebug),
+		config.NewStore(t.TempDir()),
+		nil,
+		usecase.NewVerificationScenarioUseCaseWithPreview(verificationScenarioHandlerProfilesStub{}, verificationScenarioHandlerRepositoryStub{}, verificationScenarioHandlerProfilesStub{}),
+	)
+
+	tests := []struct {
+		name    string
+		request PreviewVerificationRunRequest
+	}{
+		{
+			name:    "保存済みと下書きが未指定",
+			request: PreviewVerificationRunRequest{},
+		},
+		{
+			name: "保存済みと下書きを同時指定",
+			request: PreviewVerificationRunRequest{
+				ScenarioID: "scenario-1",
+				Draft:      &VerificationScenarioDraftRequest{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := handler.PreviewVerificationRun(tt.request)
+			if got.Data != nil {
+				t.Errorf("PreviewVerificationRun() Data = %#v, want nil", got.Data)
+			}
+			if got.Error == nil || got.Error.Code != string(apperr.CodeValidationFailed) {
+				t.Errorf("PreviewVerificationRun() Error = %#v, want VALIDATION_FAILED", got.Error)
+			}
+		})
+	}
+}
+
+// 検証実行プレビュー応答分岐検証
+func TestAppHandlerPreviewVerificationRunBranches(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	validRequest := validCreateVerificationScenarioRequest()
+	validDraft := VerificationScenarioDraftRequest(validRequest)
+	validSchema := domain.Schema{Tables: []domain.Table{
+		{
+			Namespace: "app",
+			Name:      "orders",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				},
+			},
+		},
+		{
+			Namespace: "app",
+			Name:      "order_items",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				},
+			},
+		},
+	}}
+
+	tests := []struct {
+		name       string
+		useCaseNil bool
+		profiles   verificationScenarioHandlerProfilesStub
+		request    PreviewVerificationRunRequest
+		wantCode   apperr.Code
+		wantReady  bool
+	}{
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			useCaseNil: true,
+			request:    PreviewVerificationRunRequest{Draft: &validDraft},
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "主キー生成規則不足を安全な失敗で返す",
+			request: PreviewVerificationRunRequest{Draft: &VerificationScenarioDraftRequest{
+				Name:         createRequestWithoutPrimaryKeyGenerator().Name,
+				PrimaryTable: createRequestWithoutPrimaryKeyGenerator().PrimaryTable,
+				Definition:   createRequestWithoutPrimaryKeyGenerator().Definition,
+			}},
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+		{
+			name: "形式違反を安全な失敗で返す",
+			request: PreviewVerificationRunRequest{Draft: &VerificationScenarioDraftRequest{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			}},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "ユースケース失敗を安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+			},
+			request:  PreviewVerificationRunRequest{Draft: &validDraft},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "下書きプレビューをDTOで返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				schema:          validSchema,
+			},
+			request:   PreviewVerificationRunRequest{Draft: &validDraft},
+			wantReady: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var scenarioUseCase *usecase.VerificationScenarioUseCase
+			if !tt.useCaseNil {
+				scenarioUseCase = usecase.NewVerificationScenarioUseCaseWithPreview(tt.profiles, verificationScenarioHandlerRepositoryStub{}, tt.profiles)
+			}
+			handler := NewAppHandler(
+				applogger.NewWithWriter(&bytes.Buffer{}, slog.LevelDebug),
+				config.NewStore(t.TempDir()),
+				nil,
+				scenarioUseCase,
+			)
+
+			got := handler.PreviewVerificationRun(tt.request)
+			if tt.wantCode != "" {
+				if got.Error == nil {
+					t.Fatal("Error = nil, want error response")
+				}
+				if got.Error.Code != string(tt.wantCode) {
+					t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+				}
+
+				return
+			}
+			if got.Error != nil {
+				t.Fatalf("Error = %#v, want nil", got.Error)
+			}
+			if got.Data == nil {
+				t.Fatal("Data = nil, want preview response")
+			}
+			if got.Data.Ready != tt.wantReady {
+				t.Errorf("Data.Ready = %v, want %v", got.Data.Ready, tt.wantReady)
+			}
+		})
+	}
+}
+
+// 検証実行プレビュー成功DTO検証
+func TestAppHandlerPreviewVerificationRunResponse(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	request := validCreateVerificationScenarioRequest()
+	draft := VerificationScenarioDraftRequest(request)
+	schema := domain.Schema{
+		Tables: []domain.Table{
+			{
+				Namespace: "app",
+				Name:      "customers",
+				Columns: []domain.Column{{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				}},
+			},
+			{
+				Namespace: "app",
+				Name:      "orders",
+				Columns: []domain.Column{{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				}},
+			},
+			{
+				Namespace: "app",
+				Name:      "order_items",
+				Columns: []domain.Column{{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				}},
+			},
+		},
+		ForeignKeys: []domain.ForeignKey{
+			{
+				Name:        "orders_customer",
+				FromTable:   "orders",
+				FromColumns: []string{"customer_id"},
+				ToTable:     "customers",
+				ToColumns:   []string{"id"},
+			},
+			{
+				Name:        "order_items_order",
+				FromTable:   "order_items",
+				FromColumns: []string{"order_id"},
+				ToTable:     "orders",
+				ToColumns:   []string{"id"},
+			},
+		},
+	}
+	tests := []struct {
+		name string
+		want VerificationRunPreviewResponse
+	}{
+		{
+			name: "全フィールドをプレビューDTOへ変換する",
+			want: VerificationRunPreviewResponse{
+				Ready: true,
+				InsertOrder: []VerificationRunPreviewTableResponse{
+					{
+						Name:               "customers",
+						RowCount:           10,
+						AutomaticallyAdded: true,
+						GeneratedColumns:   []string{},
+					},
+					{
+						Name:               "orders",
+						RowCount:           10,
+						AutomaticallyAdded: false,
+						GeneratedColumns:   []string{"id"},
+					},
+					{
+						Name:               "order_items",
+						RowCount:           20,
+						AutomaticallyAdded: false,
+						GeneratedColumns:   []string{"id"},
+					},
+				},
+				DeleteOrder: []VerificationRunPreviewTableResponse{
+					{
+						Name:               "order_items",
+						RowCount:           20,
+						AutomaticallyAdded: false,
+						GeneratedColumns:   []string{"id"},
+					},
+					{
+						Name:               "orders",
+						RowCount:           10,
+						AutomaticallyAdded: false,
+						GeneratedColumns:   []string{"id"},
+					},
+					{
+						Name:               "customers",
+						RowCount:           10,
+						AutomaticallyAdded: true,
+						GeneratedColumns:   []string{},
+					},
+				},
+				Warnings: []string{},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profiles := verificationScenarioHandlerProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				schema:          schema,
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(&bytes.Buffer{}, slog.LevelDebug), config.NewStore(t.TempDir()), nil, usecase.NewVerificationScenarioUseCaseWithPreview(profiles, verificationScenarioHandlerRepositoryStub{}, profiles))
+
+			got := handler.PreviewVerificationRun(PreviewVerificationRunRequest{Draft: &draft})
+			if got.Error != nil {
+				t.Fatalf("PreviewVerificationRun() Error = %#v, want nil", got.Error)
+			}
+			if got.Data == nil {
+				t.Fatal("PreviewVerificationRun() Data = nil, want preview")
+			}
+			if !reflect.DeepEqual(*got.Data, tt.want) {
+				t.Errorf("PreviewVerificationRun() Data = %#v, want %#v", *got.Data, tt.want)
+			}
+		})
+	}
+}
+
+// 機密情報を含むプレビュー障害の非公開検証
+func TestAppHandlerPreviewVerificationRunDoesNotExposeSensitiveErrors(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	request := validCreateVerificationScenarioRequest()
+	draft := VerificationScenarioDraftRequest(request)
+	tests := []struct {
+		name     string
+		profiles verificationScenarioHandlerProfilesStub
+		wantCode apperr.Code
+	}{
+		{
+			name: "資格情報取得エラーを公開しない",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      stringPointer(profile.ID),
+				credentialErr: errors.New("password=super-secret"),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "DB接続エラーを公開しない",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "super-secret",
+				credentialFound: true,
+				schemaErr:       errors.New("mysql://user:super-secret@host/app"),
+			},
+			wantCode: apperr.CodeSchemaLoadFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), nil, usecase.NewVerificationScenarioUseCaseWithPreview(tt.profiles, verificationScenarioHandlerRepositoryStub{}, tt.profiles))
+
+			got := handler.PreviewVerificationRun(PreviewVerificationRunRequest{Draft: &draft})
+			if got.Data != nil {
+				t.Errorf("PreviewVerificationRun() Data = %#v, want nil", got.Data)
+			}
+			if got.Error == nil {
+				t.Fatal("PreviewVerificationRun() Error = nil, want error response")
+			}
+			if got.Error.Code != string(tt.wantCode) {
+				t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+			}
+			if bytes.Contains([]byte(got.Error.Message), []byte("super-secret")) {
+				t.Errorf("Error.Message = %q, must not contain sensitive detail", got.Error.Message)
+			}
+			if bytes.Contains(output.Bytes(), []byte("super-secret")) {
+				t.Errorf("log = %q, must not contain sensitive detail", output.String())
+			}
+		})
+	}
+}
+
 // プロファイル読込再現
 func (s verificationScenarioHandlerProfilesStub) LoadProfiles() ([]domain.Profile, *string, error) {
 	return s.profiles, s.activeID, s.err
+}
+
+// 資格情報取得再現
+func (s verificationScenarioHandlerProfilesStub) GetCredential(string) (string, bool, error) {
+	return s.credential, s.credentialFound, s.credentialErr
+}
+
+// スキーマ取得再現
+func (s verificationScenarioHandlerProfilesStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
+	return s.schema, s.schemaErr
 }
 
 // シナリオ一覧取得再現

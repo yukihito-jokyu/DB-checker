@@ -80,6 +80,31 @@ type DeleteScenarioResponse struct {
 	WorkspaceRemoved bool   `json:"workspaceRemoved"`
 }
 
+type PreviewVerificationRunRequest struct {
+	ScenarioID string                            `json:"scenarioId"`
+	Draft      *VerificationScenarioDraftRequest `json:"draft"`
+}
+
+type VerificationScenarioDraftRequest struct {
+	Name         string         `json:"name"`
+	PrimaryTable string         `json:"primaryTable"`
+	Definition   map[string]any `json:"definition"`
+}
+
+type VerificationRunPreviewTableResponse struct {
+	Name               string   `json:"name"`
+	RowCount           int      `json:"rowCount"`
+	AutomaticallyAdded bool     `json:"automaticallyAdded"`
+	GeneratedColumns   []string `json:"generatedColumns"`
+}
+
+type VerificationRunPreviewResponse struct {
+	Ready       bool                                  `json:"ready"`
+	InsertOrder []VerificationRunPreviewTableResponse `json:"insertOrder"`
+	DeleteOrder []VerificationRunPreviewTableResponse `json:"deleteOrder"`
+	Warnings    []string                              `json:"warnings"`
+}
+
 type VerificationWorkspaceResponse struct {
 	ScenarioID    string `json:"scenarioId"`
 	WorkspaceName string `json:"workspaceName"`
