@@ -23,10 +23,11 @@ type verificationScenarioHandlerProfilesStub struct {
 }
 
 type verificationScenarioHandlerRepositoryStub struct {
-	scenarios []domain.VerificationScenarioSummary
-	scenario  domain.VerificationScenario
-	found     bool
-	err       error
+	scenarios   []domain.VerificationScenarioSummary
+	scenario    domain.VerificationScenario
+	found       bool
+	err         error
+	createCalls *int
 }
 
 // プロファイル読込再現
@@ -42,6 +43,166 @@ func (s verificationScenarioHandlerRepositoryStub) ListVerificationScenarios(_ c
 // シナリオ詳細取得再現
 func (s verificationScenarioHandlerRepositoryStub) GetVerificationScenario(_ context.Context, _, _ string) (domain.VerificationScenario, bool, error) {
 	return s.scenario, s.found, s.err
+}
+
+// シナリオ作成再現
+func (s verificationScenarioHandlerRepositoryStub) CreateVerificationScenario(_ context.Context, _ string, _ domain.VerificationScenario) error {
+	if s.createCalls != nil {
+		*s.createCalls++
+	}
+
+	return s.err
+}
+
+// シナリオ作成ハンドラー応答検証
+func TestAppHandlerCreateVerificationScenario(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	tests := []struct {
+		name            string
+		useCaseNil      bool
+		profiles        verificationScenarioHandlerProfilesStub
+		repository      verificationScenarioHandlerRepositoryStub
+		request         CreateVerificationScenarioRequest
+		wantCode        apperr.Code
+		wantCreateCalls int
+	}{
+		{
+			name: "作成結果をDTOで返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request:         validCreateVerificationScenarioRequest(),
+			wantCreateCalls: 1,
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			useCaseNil: true,
+			request:    validCreateVerificationScenarioRequest(),
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "主対象の一意生成規則不足を安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request:  createRequestWithoutPrimaryKeyGenerator(),
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+		{
+			name: "形式違反を安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request: CreateVerificationScenarioRequest{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name:     "アクティブプロファイル不在を安全な失敗で返す",
+			request:  validCreateVerificationScenarioRequest(),
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "保存失敗を安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			repository:      verificationScenarioHandlerRepositoryStub{err: errors.New("sqlite path=/private/secret")},
+			request:         validCreateVerificationScenarioRequest(),
+			wantCode:        apperr.CodeScenarioStoreFailed,
+			wantCreateCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var scenarioUseCase *usecase.VerificationScenarioUseCase
+			createCalls := 0
+			if !tt.useCaseNil {
+				repository := tt.repository
+				repository.createCalls = &createCalls
+				scenarioUseCase = usecase.NewVerificationScenarioUseCase(tt.profiles, repository)
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), nil, scenarioUseCase)
+
+			got := handler.CreateVerificationScenario(tt.request)
+			if tt.wantCode == "" {
+				if got.Error != nil {
+					t.Fatalf("CreateVerificationScenario() Error = %#v, want nil", got.Error)
+				}
+				if got.Data == nil {
+					t.Fatal("CreateVerificationScenario() Data = nil, want non-nil")
+				}
+				if got.Data.ID == "" || got.Data.WorkspaceName != nil || got.Data.LatestRun != nil {
+					t.Errorf("CreateVerificationScenario() Data = %#v, want generated ID and nil workspace/run", got.Data)
+				}
+			} else {
+				if got.Data != nil {
+					t.Errorf("CreateVerificationScenario() Data = %#v, want nil", got.Data)
+				}
+				if got.Error == nil {
+					t.Fatal("CreateVerificationScenario() Error = nil, want error response")
+				}
+				if got.Error.Code != string(tt.wantCode) {
+					t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+				}
+				if got.Error.Message == "" || bytes.Contains([]byte(got.Error.Message), []byte("secret")) {
+					t.Errorf("Error.Message = %q, want safe non-empty message", got.Error.Message)
+				}
+				if !bytes.Contains(output.Bytes(), []byte("code="+string(tt.wantCode))) {
+					t.Errorf("log = %q, want code=%s", output.String(), tt.wantCode)
+				}
+				if bytes.Contains(output.Bytes(), []byte("secret")) || bytes.Contains(output.Bytes(), []byte("verification.sqlite3")) {
+					t.Errorf("log = %q, must not contain sensitive details", output.String())
+				}
+			}
+			if createCalls != tt.wantCreateCalls {
+				t.Errorf("CreateVerificationScenario() repository calls = %d, want %d", createCalls, tt.wantCreateCalls)
+			}
+		})
+	}
+}
+
+// 有効な作成要求生成
+func validCreateVerificationScenarioRequest() CreateVerificationScenarioRequest {
+	return CreateVerificationScenarioRequest{
+		Name:         "検証",
+		PrimaryTable: "orders",
+		Definition: map[string]any{
+			"childTables": []any{"order_items"},
+			"rowCounts": map[string]any{
+				"orders":      10,
+				"order_items": 20,
+			},
+			"columnGenerators": map[string]any{
+				"orders":      map[string]any{"id": map[string]any{"kind": "sequence"}},
+				"order_items": map[string]any{"id": map[string]any{"kind": "uuid"}},
+			},
+			"sql":              []any{"SELECT * FROM orders WHERE id = ?"},
+			"warmupRuns":       0,
+			"iterations":       1,
+			"timeLimitSeconds": 1,
+		},
+	}
+}
+
+// 主対象生成規則なしの作成要求生成
+func createRequestWithoutPrimaryKeyGenerator() CreateVerificationScenarioRequest {
+	request := validCreateVerificationScenarioRequest()
+	request.Definition["columnGenerators"] = map[string]any{
+		"orders":      map[string]any{"id": map[string]any{"kind": "fixed"}},
+		"order_items": map[string]any{"id": map[string]any{"kind": "uuid"}},
+	}
+
+	return request
 }
 
 // シナリオ詳細ハンドラー応答検証

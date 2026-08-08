@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -36,6 +37,25 @@ func (r *SQLiteVerificationScenarioRepository) Initialize(ctx context.Context) e
 
 	if err := migrateVerificationScenarioDatabase(ctx, database); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// 検証シナリオ保存
+func (r *SQLiteVerificationScenarioRepository) CreateVerificationScenario(ctx context.Context, profileID string, scenario domain.VerificationScenario) error {
+	database, err := openVerificationScenarioDatabase("sqlite", r.databasePath)
+	if err != nil {
+		return fmt.Errorf("open verification scenario database: %w", err)
+	}
+	defer database.Close()
+
+	definitionJSON, err := json.Marshal(scenario.Definition)
+	if err != nil {
+		return fmt.Errorf("encode verification scenario definition: %w", err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO scenarios (id, profile_id, name, primary_table, definition_json, workspace_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, scenario.ID, profileID, scenario.Name, scenario.PrimaryTable, string(definitionJSON), nil, scenario.CreatedAt.UTC().Format(time.RFC3339Nano), scenario.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("insert verification scenario: %w", err)
 	}
 
 	return nil

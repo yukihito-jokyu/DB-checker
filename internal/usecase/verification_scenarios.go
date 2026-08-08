@@ -2,6 +2,10 @@ package usecase
 
 import (
 	"context"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
 	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
@@ -13,8 +17,34 @@ type VerificationScenarioProfileRepository interface {
 
 // シナリオリポジトリ
 type VerificationScenarioRepository interface {
+	CreateVerificationScenario(context.Context, string, domain.VerificationScenario) error
 	ListVerificationScenarios(context.Context, string) ([]domain.VerificationScenarioSummary, error)
 	GetVerificationScenario(context.Context, string, string) (domain.VerificationScenario, bool, error)
+}
+
+// アクティブプロファイルへのシナリオ作成
+func (u *VerificationScenarioUseCase) CreateVerificationScenario(ctx context.Context, draft domain.VerificationScenarioDraft) (domain.VerificationScenario, error) {
+	profiles, activeID, err := u.profiles.LoadProfiles()
+	if err != nil {
+		return domain.VerificationScenario{}, err
+	}
+	if activeID == nil || !containsVerificationScenarioProfile(profiles, *activeID) {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	scenario, err := draft.NewVerificationScenario(uuid.NewString(), time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+			return domain.VerificationScenario{}, apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+		}
+
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+	if err := u.repository.CreateVerificationScenario(ctx, *activeID, scenario); err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+	}
+
+	return scenario, nil
 }
 
 // アクティブプロファイルのシナリオ詳細取得

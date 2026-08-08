@@ -18,11 +18,13 @@ type verificationScenarioProfilesStub struct {
 }
 
 type verificationScenarioRepositoryStub struct {
-	scenarios []domain.VerificationScenarioSummary
-	scenario  domain.VerificationScenario
-	found     bool
-	err       error
-	profileID string
+	scenarios   []domain.VerificationScenarioSummary
+	scenario    domain.VerificationScenario
+	found       bool
+	err         error
+	profileID   string
+	created     domain.VerificationScenario
+	createCalls int
 }
 
 // プロファイル読込再現
@@ -42,6 +44,190 @@ func (s *verificationScenarioRepositoryStub) GetVerificationScenario(_ context.C
 	s.profileID = profileID
 
 	return s.scenario, s.found, s.err
+}
+
+// シナリオ作成再現
+func (s *verificationScenarioRepositoryStub) CreateVerificationScenario(_ context.Context, profileID string, scenario domain.VerificationScenario) error {
+	s.profileID = profileID
+	s.created = scenario
+	s.createCalls++
+
+	return s.err
+}
+
+// シナリオ作成ユースケース検証
+func TestVerificationScenarioUseCaseCreateVerificationScenario(t *testing.T) {
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	draft := newVerificationScenarioDraft(t)
+	tests := []struct {
+		name            string
+		profiles        []domain.Profile
+		activeID        *string
+		profilesErr     error
+		repositoryErr   error
+		draft           domain.VerificationScenarioDraft
+		wantCode        apperr.Code
+		wantCreateCalls int
+	}{
+		{
+			name: "作成内容をアクティブプロファイルへ渡す",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID:        stringPointer(profile.ID),
+			draft:           draft,
+			wantCreateCalls: 1,
+		},
+		{
+			name:        "プロファイル読込失敗",
+			profilesErr: errors.New("read profiles failed"),
+			draft:       draft,
+		},
+		{
+			name: "アクティブプロファイルなし",
+			profiles: []domain.Profile{
+				profile,
+			},
+			wantCode: apperr.CodeProfileNotFound,
+			draft:    draft,
+		},
+		{
+			name: "保存失敗",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID:        stringPointer(profile.ID),
+			repositoryErr:   errors.New("sqlite path=/private/secret"),
+			wantCode:        apperr.CodeScenarioStoreFailed,
+			draft:           draft,
+			wantCreateCalls: 1,
+		},
+		{
+			name: "下書き形式違反",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			draft: domain.VerificationScenarioDraft{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "主対象の一意生成規則不足",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			draft: domain.VerificationScenarioDraft{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition: map[string]any{
+					"childTables": []any{},
+					"rowCounts": map[string]any{
+						"orders": float64(1),
+					},
+					"columnGenerators": map[string]any{
+						"orders": map[string]any{"id": map[string]any{"kind": "fixed"}},
+					},
+					"sql":              []any{"SELECT 1"},
+					"warmupRuns":       float64(0),
+					"iterations":       float64(1),
+					"timeLimitSeconds": float64(1),
+				},
+			},
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := &verificationScenarioRepositoryStub{err: tt.repositoryErr}
+			profiles := verificationScenarioProfilesStub{
+				profiles: tt.profiles,
+				activeID: tt.activeID,
+				err:      tt.profilesErr,
+			}
+			useCase := NewVerificationScenarioUseCase(profiles, repository)
+
+			got, err := useCase.CreateVerificationScenario(context.Background(), tt.draft)
+			if tt.profilesErr != nil {
+				if !errors.Is(err, tt.profilesErr) {
+					t.Errorf("CreateVerificationScenario() error = %v, want wrapped %v", err, tt.profilesErr)
+				}
+
+				return
+			}
+			if tt.wantCode != "" {
+				if !apperr.IsCode(err, tt.wantCode) {
+					t.Errorf("CreateVerificationScenario() error code = %v, want %v", apperr.As(err), tt.wantCode)
+				}
+			} else if err != nil {
+				t.Fatalf("CreateVerificationScenario() error = %v", err)
+			} else {
+				if got.ID == "" {
+					t.Error("CreateVerificationScenario() ID is empty, want UUID")
+				}
+				if got.Name != tt.draft.Name || got.PrimaryTable != tt.draft.PrimaryTable {
+					t.Errorf("CreateVerificationScenario() = %#v, want draft name and primary table", got)
+				}
+				if got.WorkspaceName != nil {
+					t.Errorf("WorkspaceName = %v, want nil", got.WorkspaceName)
+				}
+				if got.CreatedAt.Location() != time.UTC || !got.CreatedAt.Equal(got.UpdatedAt) {
+					t.Errorf("timestamps = %v, %v, want equal UTC timestamps", got.CreatedAt, got.UpdatedAt)
+				}
+				if repository.profileID != profile.ID {
+					t.Errorf("CreateVerificationScenario() profile ID = %q, want %q", repository.profileID, profile.ID)
+				}
+				if !reflect.DeepEqual(repository.created, got) {
+					t.Errorf("CreateVerificationScenario() repository scenario = %#v, want %#v", repository.created, got)
+				}
+			}
+			if repository.createCalls != tt.wantCreateCalls {
+				t.Errorf("CreateVerificationScenario() repository calls = %d, want %d", repository.createCalls, tt.wantCreateCalls)
+			}
+		})
+	}
+}
+
+// 有効なシナリオ下書き生成
+func newVerificationScenarioDraft(t *testing.T) domain.VerificationScenarioDraft {
+	t.Helper()
+	draft, err := domain.NewVerificationScenarioDraft("検証", "orders", verificationScenarioDefinition())
+	if err != nil {
+		t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+	}
+
+	return draft
+}
+
+// 有効なシナリオ定義生成
+func verificationScenarioDefinition() map[string]any {
+	return map[string]any{
+		"childTables": []string{"order_items"},
+		"rowCounts": map[string]int{
+			"orders":      10,
+			"order_items": 20,
+		},
+		"columnGenerators": map[string]map[string]map[string]string{
+			"orders": {
+				"id": {"kind": "sequence"},
+			},
+			"order_items": {
+				"id": {"kind": "uuid"},
+			},
+		},
+		"sql":              []string{"SELECT * FROM orders WHERE id = ?"},
+		"warmupRuns":       0,
+		"iterations":       1,
+		"timeLimitSeconds": 1,
+	}
 }
 
 // シナリオ詳細ユースケース検証

@@ -2,11 +2,45 @@ package wails
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
+	"github.com/yukihito-jokyu/DB-checker/internal/domain"
 	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 )
+
+// 検証シナリオ作成
+func (h *AppHandler) CreateVerificationScenario(request CreateVerificationScenarioRequest) Response[VerificationScenarioResponse] {
+	h.logger.Info(context.Background(), "verification scenario create requested", slog.String("operation", "verification_scenario_create"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification scenario create failed", "verification_scenario_create", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	draft, err := domain.NewVerificationScenarioDraft(request.Name, request.PrimaryTable, request.Definition)
+	if err != nil {
+		if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+			err = apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+		} else {
+			err = apperr.Wrap(apperr.CodeValidationFailed, err)
+		}
+		h.logFailureWithCode("verification scenario create failed", "verification_scenario_create", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	scenario, err := h.verificationScenarios.CreateVerificationScenario(context.Background(), draft)
+	if err != nil {
+		h.logFailureWithCode("verification scenario create failed", "verification_scenario_create", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	return OK(verificationScenarioResponse(scenario))
+}
 
 // 検証シナリオ一覧取得
 func (h *AppHandler) ListVerificationScenarios() Response[[]VerificationScenarioSummaryResponse] {
@@ -55,7 +89,12 @@ func (h *AppHandler) GetVerificationScenario(scenarioID string) Response[Verific
 		return Fail[VerificationScenarioResponse](err)
 	}
 
-	return OK(VerificationScenarioResponse{
+	return OK(verificationScenarioResponse(scenario))
+}
+
+// 検証シナリオ応答変換
+func verificationScenarioResponse(scenario domain.VerificationScenario) VerificationScenarioResponse {
+	return VerificationScenarioResponse{
 		ID:            scenario.ID,
 		Name:          scenario.Name,
 		PrimaryTable:  scenario.PrimaryTable,
@@ -64,5 +103,5 @@ func (h *AppHandler) GetVerificationScenario(scenarioID string) Response[Verific
 		CreatedAt:     scenario.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:     scenario.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		LatestRun:     nil,
-	})
+	}
 }

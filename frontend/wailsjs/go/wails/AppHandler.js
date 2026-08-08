@@ -10,6 +10,10 @@ export function CheckProfiles() {
   return window['go']['wails']['AppHandler']['CheckProfiles']();
 }
 
+export function CreateVerificationScenario(arg1) {
+  return window['go']['wails']['AppHandler']['CreateVerificationScenario'](arg1);
+}
+
 export function DeleteConnectionProfile(arg1) {
   return window['go']['wails']['AppHandler']['DeleteConnectionProfile'](arg1);
 }
