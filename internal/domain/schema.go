@@ -478,7 +478,33 @@ func (r InsertRow) Validate(columns []Column) error {
 
 // セル更新入力検証
 func (c CellUpdate) Validate(columns []Column) error {
-	if _, err := NewTableRef(c.Table.Namespace, c.Table.Name); err != nil || c.Column == "" || len(columns) == 0 || len(c.Locator.Values) == 0 {
+	if _, err := NewTableRef(c.Table.Namespace, c.Table.Name); err != nil || c.Column == "" || len(columns) == 0 {
+		return ErrInvalidRowInput
+	}
+
+	columnMap := make(map[string]Column, len(columns))
+	for _, column := range columns {
+		if column.Name == "" {
+			return ErrInvalidRowInput
+		}
+		columnMap[column.Name] = column
+	}
+
+	target, found := columnMap[c.Column]
+	if !found || target.IsGenerated || !validUpdateValue(c.Value, target) {
+		return ErrInvalidRowInput
+	}
+
+	if err := c.Locator.Validate(c.Table, columns); err != nil {
+		return ErrInvalidRowInput
+	}
+
+	return nil
+}
+
+// 行位置指定検証
+func (r RowLocator) Validate(table TableRef, columns []Column) error {
+	if _, err := NewTableRef(table.Namespace, table.Name); err != nil || len(columns) == 0 || len(r.Values) == 0 {
 		return ErrInvalidRowInput
 	}
 
@@ -494,13 +520,8 @@ func (c CellUpdate) Validate(columns []Column) error {
 		}
 	}
 
-	target, found := columnMap[c.Column]
-	if !found || target.IsGenerated || !validUpdateValue(c.Value, target) {
-		return ErrInvalidRowInput
-	}
-
-	locator := make(map[string]struct{}, len(c.Locator.Values))
-	for _, value := range c.Locator.Values {
+	locator := make(map[string]struct{}, len(r.Values))
+	for _, value := range r.Values {
 		column, found := columnMap[value.Column]
 		if !found || !validLocatorValue(value, column) {
 			return ErrInvalidRowInput
@@ -520,7 +541,10 @@ func (c CellUpdate) Validate(columns []Column) error {
 				return ErrInvalidRowInput
 			}
 		}
-	} else if len(locator) != len(columnMap) {
+
+		return nil
+	}
+	if len(locator) != len(columnMap) {
 		return ErrInvalidRowInput
 	}
 

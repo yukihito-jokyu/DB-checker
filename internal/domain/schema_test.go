@@ -1388,3 +1388,125 @@ func TestCellUpdateValidateCompositePrimaryKey(t *testing.T) {
 		t.Errorf("Validate() error = %v, want nil", err)
 	}
 }
+
+// 行位置指定入力検証
+func TestRowLocatorValidate(t *testing.T) {
+	id := "1"
+	name := "name"
+	columns := []Column{
+		{
+			Name:         "id",
+			DataType:     "int4",
+			IsPrimaryKey: true,
+		},
+		{
+			Name:     "name",
+			DataType: "text",
+		},
+	}
+	table := TableRef{
+		Namespace: "public",
+		Name:      "users",
+	}
+	tests := []struct {
+		name    string
+		locator RowLocator
+		wantErr bool
+	}{
+		{
+			name: "主キー位置指定を許可する",
+			locator: RowLocator{Values: []ColumnValueInput{
+				{
+					Column: "id",
+					Kind:   CellKindValue,
+					Value:  &id,
+				},
+			}},
+		},
+		{
+			name: "主キー以外の位置指定を拒否する",
+			locator: RowLocator{Values: []ColumnValueInput{
+				{
+					Column: "name",
+					Kind:   CellKindValue,
+					Value:  &name,
+				},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "値なし位置指定を拒否する",
+			locator: RowLocator{Values: []ColumnValueInput{
+				{
+					Column: "id",
+					Kind:   CellKindValue,
+				},
+			}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.locator.Validate(table, columns)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+
+	emptyColumnLocator := RowLocator{Values: []ColumnValueInput{
+		{
+			Column: "id",
+			Kind:   CellKindValue,
+			Value:  &id,
+		},
+	}}
+	emptyColumnTable := TableRef{
+		Namespace: "public",
+		Name:      "users",
+	}
+	emptyColumnDefinition := []Column{
+		{
+			Name:         "",
+			DataType:     "int4",
+			IsPrimaryKey: true,
+		},
+	}
+	if err := emptyColumnLocator.Validate(emptyColumnTable, emptyColumnDefinition); !errors.Is(err, ErrInvalidRowInput) {
+		t.Errorf("Validate() error = %v, want %v", err, ErrInvalidRowInput)
+	}
+
+	noPrimaryKeyLocator := RowLocator{Values: []ColumnValueInput{
+		{
+			Column: "id",
+			Kind:   CellKindValue,
+			Value:  &id,
+		},
+		{
+			Column: "name",
+			Kind:   CellKindValue,
+			Value:  &name,
+		},
+	}}
+	noPrimaryKeyColumns := []Column{
+		{
+			Name:     "id",
+			DataType: "int4",
+		},
+		{
+			Name:     "name",
+			DataType: "text",
+		},
+	}
+	if err := noPrimaryKeyLocator.Validate(emptyColumnTable, noPrimaryKeyColumns); err != nil {
+		t.Errorf("Validate() error = %v, want nil", err)
+	}
+
+	invalidTable := TableRef{
+		Name: "users",
+	}
+	if err := noPrimaryKeyLocator.Validate(invalidTable, noPrimaryKeyColumns); !errors.Is(err, ErrInvalidRowInput) {
+		t.Errorf("Validate() error = %v, want %v", err, ErrInvalidRowInput)
+	}
+}
