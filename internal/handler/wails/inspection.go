@@ -171,6 +171,31 @@ func (h *AppHandler) UpdateTableCell(request UpdateTableCellRequest) Response[Af
 	return OK(AffectedRowsResponse{AffectedRows: affected.AffectedRows})
 }
 
+// テーブル行削除
+func (h *AppHandler) DeleteTableRow(request DeleteTableRowRequest) Response[AffectedRowsResponse] {
+	h.logger.Info(context.Background(), "table row delete requested", slog.String("operation", "table_row_delete"))
+	if h.appUseCase == nil {
+		err := apperr.New(apperr.CodeRowDeleteFailed)
+		h.logFailureWithCode("table row delete failed", "table_row_delete", err)
+
+		return Fail[AffectedRowsResponse](err)
+	}
+
+	locator := make([]domain.ColumnValueInput, 0, len(request.Locator))
+	for _, value := range request.Locator {
+		locator = append(locator, domain.ColumnValueInput{Column: value.Column, Kind: domain.CellKind(value.Kind), Value: value.Value})
+	}
+
+	affected, err := h.appUseCase.DeleteTableRow(context.Background(), request.Table, domain.RowLocator{Values: locator})
+	if err != nil {
+		h.logFailureWithCode("table row delete failed", "table_row_delete", err)
+
+		return Fail[AffectedRowsResponse](err)
+	}
+
+	return OK(AffectedRowsResponse{AffectedRows: affected.AffectedRows})
+}
+
 // 統計要求開始
 func (h *AppHandler) beginTableStatistics() (context.Context, context.CancelFunc, uint64) {
 	h.statisticsMu.Lock()

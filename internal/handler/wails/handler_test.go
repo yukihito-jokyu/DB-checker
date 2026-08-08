@@ -67,6 +67,11 @@ func (*connectionProfileRepositoryStub) UpdateCell(context.Context, domain.Profi
 	return domain.AffectedRows{}, nil
 }
 
+// テーブル行削除再現
+func (*connectionProfileRepositoryStub) DeleteRow(context.Context, domain.Profile, string, domain.TableRef, domain.RowLocator) (domain.AffectedRows, error) {
+	return domain.AffectedRows{}, nil
+}
+
 // フロー状態読込再現
 func (s *connectionProfileRepositoryStub) LoadFlowState(string) (domain.FlowState, error) {
 	return s.flowState, s.flowStateErr
