@@ -17,6 +17,12 @@ type VerificationScenarioProfileRepository interface {
 	LoadProfiles() ([]domain.Profile, *string, error)
 }
 
+// 検証実行プレビュー用リポジトリ
+type VerificationRunPreviewRepository interface {
+	GetCredential(string) (credential string, found bool, err error)
+	InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error)
+}
+
 // シナリオリポジトリ
 type VerificationScenarioRepository interface {
 	CreateVerificationScenario(context.Context, string, domain.VerificationScenario) error
@@ -422,6 +428,7 @@ func (u *VerificationScenarioUseCase) UpdateVerificationScenario(ctx context.Con
 // 検証シナリオユースケース
 type VerificationScenarioUseCase struct {
 	profiles   VerificationScenarioProfileRepository
+	preview    VerificationRunPreviewRepository
 	repository VerificationScenarioRepository
 	workspace  VerificationWorkspaceRepository
 }
@@ -434,6 +441,14 @@ func NewVerificationScenarioUseCase(profiles VerificationScenarioProfileReposito
 	}
 
 	return &VerificationScenarioUseCase{profiles: profiles, repository: repository, workspace: workspace}
+}
+
+// プレビュー対応検証シナリオユースケース生成
+func NewVerificationScenarioUseCaseWithPreview(profiles VerificationScenarioProfileRepository, repository VerificationScenarioRepository, preview VerificationRunPreviewRepository, workspaces ...VerificationWorkspaceRepository) *VerificationScenarioUseCase {
+	useCase := NewVerificationScenarioUseCase(profiles, repository, workspaces...)
+	useCase.preview = preview
+
+	return useCase
 }
 
 // アクティブプロファイル取得
@@ -473,6 +488,72 @@ func (u *VerificationScenarioUseCase) ListVerificationScenarios(ctx context.Cont
 	}
 
 	return scenarios, nil
+}
+
+// 検証実行プレビュー取得
+func (u *VerificationScenarioUseCase) PreviewVerificationRun(ctx context.Context, scenarioID string, draft *domain.VerificationScenarioDraft) (domain.VerificationRunPreview, error) {
+	if (scenarioID == "") == (draft == nil) {
+		return domain.VerificationRunPreview{}, apperr.New(apperr.CodeValidationFailed)
+	}
+	if u.preview == nil {
+		return domain.VerificationRunPreview{}, apperr.New(apperr.CodeSchemaLoadFailed)
+	}
+
+	profiles, activeID, err := u.profiles.LoadProfiles()
+	if err != nil {
+		return domain.VerificationRunPreview{}, err
+	}
+	if activeID == nil || !containsVerificationScenarioProfile(profiles, *activeID) {
+		return domain.VerificationRunPreview{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile := activeProfile(profiles, *activeID)
+	var previewDraft domain.VerificationScenarioDraft
+	if draft != nil {
+		if err := draft.Validate(); err != nil {
+			return domain.VerificationRunPreview{}, previewValidationError(err)
+		}
+		previewDraft = *draft
+	} else {
+		scenario, found, err := u.repository.GetVerificationScenario(ctx, *activeID, scenarioID)
+		if err != nil {
+			return domain.VerificationRunPreview{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+		}
+		if !found {
+			return domain.VerificationRunPreview{}, apperr.New(apperr.CodeScenarioNotFound)
+		}
+		previewDraft, err = domain.NewVerificationScenarioDraft(scenario.Name, scenario.PrimaryTable, scenario.Definition)
+		if err != nil {
+			return domain.VerificationRunPreview{}, previewValidationError(err)
+		}
+	}
+
+	credential, found, err := u.preview.GetCredential(profile.ID)
+	if err != nil {
+		return domain.VerificationRunPreview{}, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+	if !found {
+		return domain.VerificationRunPreview{}, apperr.New(apperr.CodeCredentialUnavailable)
+	}
+
+	schema, err := u.preview.InspectSchema(ctx, profile, credential)
+	if err != nil {
+		return domain.VerificationRunPreview{}, apperr.Wrap(apperr.CodeSchemaLoadFailed, err)
+	}
+	if err := schema.Validate(schemaNamespace(profile)); err != nil {
+		return domain.VerificationRunPreview{}, apperr.Wrap(apperr.CodeSchemaLoadFailed, err)
+	}
+
+	return domain.PreviewVerificationRun(previewDraft, schema), nil
+}
+
+// プレビュー入力エラー変換
+func previewValidationError(err error) error {
+	if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+		return apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+	}
+
+	return apperr.Wrap(apperr.CodeValidationFailed, err)
 }
 
 // シナリオ用プロファイル存在判定

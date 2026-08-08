@@ -12,9 +12,14 @@ import (
 )
 
 type verificationScenarioProfilesStub struct {
-	profiles []domain.Profile
-	activeID *string
-	err      error
+	profiles        []domain.Profile
+	activeID        *string
+	err             error
+	credential      string
+	credentialFound bool
+	credentialErr   error
+	schema          domain.Schema
+	schemaErr       error
 }
 
 type verificationScenarioRepositoryStub struct {
@@ -67,6 +72,16 @@ type verificationWorkspaceStub struct {
 // プロファイル読込再現
 func (s verificationScenarioProfilesStub) LoadProfiles() ([]domain.Profile, *string, error) {
 	return s.profiles, s.activeID, s.err
+}
+
+// 資格情報取得再現
+func (s verificationScenarioProfilesStub) GetCredential(string) (string, bool, error) {
+	return s.credential, s.credentialFound, s.credentialErr
+}
+
+// スキーマ取得再現
+func (s verificationScenarioProfilesStub) InspectSchema(context.Context, domain.Profile, string) (domain.Schema, error) {
+	return s.schema, s.schemaErr
 }
 
 // シナリオ一覧取得再現
@@ -186,6 +201,353 @@ func (s *verificationWorkspaceStub) DeleteWorkspace(context.Context, domain.Prof
 	s.deleteCalls++
 
 	return s.deleteErr
+}
+
+// 検証実行プレビューユースケース検証
+func TestVerificationScenarioUseCasePreviewVerificationRun(t *testing.T) {
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	draft := newVerificationScenarioDraft(t)
+	profiles := verificationScenarioProfilesStub{
+		profiles:        []domain.Profile{profile},
+		activeID:        stringPointer("profile-1"),
+		credential:      "secret",
+		credentialFound: true,
+		schema: domain.Schema{
+			Tables: []domain.Table{
+				{
+					Namespace: "app",
+					Name:      "orders",
+					Columns: []domain.Column{
+						{
+							Name:         "id",
+							DataType:     "bigint",
+							IsPrimaryKey: true,
+						},
+					},
+				},
+				{
+					Namespace: "app",
+					Name:      "order_items",
+					Columns: []domain.Column{
+						{
+							Name:         "id",
+							DataType:     "bigint",
+							IsPrimaryKey: true,
+						},
+					},
+				},
+			},
+			ForeignKeys: []domain.ForeignKey{
+				{
+					Name:        "order_items_order",
+					FromTable:   "order_items",
+					FromColumns: []string{"order_id"},
+					ToTable:     "orders",
+					ToColumns:   []string{"id"},
+				},
+			},
+		},
+	}
+	repository := &verificationScenarioRepositoryStub{}
+	useCase := NewVerificationScenarioUseCaseWithPreview(profiles, repository, profiles)
+
+	got, err := useCase.PreviewVerificationRun(context.Background(), "", &draft)
+	if err != nil {
+		t.Fatalf("PreviewVerificationRun() error = %v", err)
+	}
+	if !got.Ready || len(got.InsertOrder) != 2 || got.InsertOrder[0].Name != "orders" || got.InsertOrder[1].Name != "order_items" {
+		t.Errorf("PreviewVerificationRun() = %#v, want ready parent-to-child preview", got)
+	}
+	if repository.createCalls != 0 || repository.updateCalls != 0 || repository.deleteCalls != 0 {
+		t.Errorf("repository mutations = create:%d update:%d delete:%d, want all zero", repository.createCalls, repository.updateCalls, repository.deleteCalls)
+	}
+
+	_, err = useCase.PreviewVerificationRun(context.Background(), "scenario-1", &draft)
+	if !apperr.IsCode(err, apperr.CodeValidationFailed) {
+		t.Errorf("PreviewVerificationRun() error code = %q, want %q", apperr.As(err).Code, apperr.CodeValidationFailed)
+	}
+}
+
+// 検証実行プレビューユースケース分岐検証
+func TestVerificationScenarioUseCasePreviewVerificationRunBranches(t *testing.T) {
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	draft := newVerificationScenarioDraft(t)
+	scenario, err := draft.NewVerificationScenario("scenario-1", time.Now())
+	if err != nil {
+		t.Fatalf("NewVerificationScenario() error = %v", err)
+	}
+	schema := domain.Schema{Tables: []domain.Table{
+		{
+			Namespace: "app",
+			Name:      "orders",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				},
+			},
+		},
+		{
+			Namespace: "app",
+			Name:      "order_items",
+			Columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "bigint",
+					IsPrimaryKey: true,
+				},
+			},
+		},
+	}}
+
+	tests := []struct {
+		name          string
+		scenarioID    string
+		draft         *domain.VerificationScenarioDraft
+		profiles      verificationScenarioProfilesStub
+		repository    verificationScenarioRepositoryStub
+		wantCode      apperr.Code
+		wantSourceErr error
+		wantReady     bool
+	}{
+		{
+			name:       "保存済みと下書きの同時指定を拒否する",
+			scenarioID: "scenario-1",
+			draft:      &draft,
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name:          "プロファイル読込失敗を返す",
+			draft:         &draft,
+			profiles:      verificationScenarioProfilesStub{err: errors.New("profiles failed")},
+			wantSourceErr: errors.New("profiles failed"),
+		},
+		{
+			name:     "アクティブプロファイルなしを拒否する",
+			draft:    &draft,
+			profiles: verificationScenarioProfilesStub{profiles: []domain.Profile{profile}},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:  "下書き形式違反を拒否する",
+			draft: &domain.VerificationScenarioDraft{},
+			profiles: verificationScenarioProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name:       "保存済み読込失敗を変換する",
+			scenarioID: "scenario-1",
+			profiles: verificationScenarioProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			repository: verificationScenarioRepositoryStub{getErr: errors.New("sqlite failed")},
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name:       "保存済み未発見を返す",
+			scenarioID: "scenario-1",
+			profiles: verificationScenarioProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			repository: verificationScenarioRepositoryStub{},
+			wantCode:   apperr.CodeScenarioNotFound,
+		},
+		{
+			name:       "保存済み形式違反を変換する",
+			scenarioID: "scenario-1",
+			profiles: verificationScenarioProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			repository: verificationScenarioRepositoryStub{
+				found: true,
+				scenario: domain.VerificationScenario{
+					Name:         "検証",
+					PrimaryTable: "orders",
+					Definition:   map[string]any{},
+				},
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name:  "資格情報取得失敗を変換する",
+			draft: &draft,
+			profiles: verificationScenarioProfilesStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      stringPointer(profile.ID),
+				credentialErr: errors.New("credential failed"),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:  "資格情報未発見を返す",
+			draft: &draft,
+			profiles: verificationScenarioProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name:  "スキーマ取得失敗を変換する",
+			draft: &draft,
+			profiles: verificationScenarioProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				schemaErr:       errors.New("schema failed"),
+			},
+			wantCode: apperr.CodeSchemaLoadFailed,
+		},
+		{
+			name:  "不正なスキーマを変換する",
+			draft: &draft,
+			profiles: verificationScenarioProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				schema: domain.Schema{Tables: []domain.Table{
+					{
+						Namespace: "other",
+						Name:      "orders",
+					},
+				}},
+			},
+			wantCode: apperr.CodeSchemaLoadFailed,
+		},
+		{
+			name:  "下書きプレビューを返す",
+			draft: &draft,
+			profiles: verificationScenarioProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				schema:          schema,
+			},
+			wantReady: true,
+		},
+		{
+			name:       "保存済みプレビューを返す",
+			scenarioID: "scenario-1",
+			profiles: verificationScenarioProfilesStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        stringPointer(profile.ID),
+				credential:      "secret",
+				credentialFound: true,
+				schema:          schema,
+			},
+			repository: verificationScenarioRepositoryStub{
+				found:    true,
+				scenario: scenario,
+			},
+			wantReady: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			useCase := NewVerificationScenarioUseCaseWithPreview(tt.profiles, &repository, tt.profiles)
+
+			got, err := useCase.PreviewVerificationRun(context.Background(), tt.scenarioID, tt.draft)
+			if tt.wantSourceErr != nil {
+				if err == nil || err.Error() != tt.wantSourceErr.Error() {
+					t.Errorf("PreviewVerificationRun() error = %v, want %v", err, tt.wantSourceErr)
+				}
+
+				return
+			}
+			if tt.wantCode != "" {
+				if !apperr.IsCode(err, tt.wantCode) {
+					t.Errorf("PreviewVerificationRun() error code = %v, want %v", apperr.As(err), tt.wantCode)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("PreviewVerificationRun() error = %v", err)
+			}
+			if got.Ready != tt.wantReady {
+				t.Errorf("Ready = %v, want %v", got.Ready, tt.wantReady)
+			}
+			if repository.createCalls != 0 || repository.updateCalls != 0 || repository.deleteCalls != 0 {
+				t.Errorf("repository mutations = create:%d update:%d delete:%d, want all zero", repository.createCalls, repository.updateCalls, repository.deleteCalls)
+			}
+		})
+	}
+}
+
+// プレビュー入力エラー変換検証
+func TestPreviewValidationError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode apperr.Code
+	}{
+		{
+			name:     "主キー生成規則不足を専用コードへ変換する",
+			err:      domain.ErrPrimaryKeyRequired,
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+		{
+			name:     "その他の形式違反を検証失敗へ変換する",
+			err:      domain.ErrInvalidVerificationScenarioDraft,
+			wantCode: apperr.CodeValidationFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := previewValidationError(tt.err); !apperr.IsCode(got, tt.wantCode) {
+				t.Errorf("previewValidationError() code = %v, want %v", apperr.As(got), tt.wantCode)
+			}
+		})
+	}
+}
+
+// プレビュー依存未注入検証
+func TestVerificationScenarioUseCasePreviewVerificationRunWithoutPreviewRepository(t *testing.T) {
+	draft := newVerificationScenarioDraft(t)
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "プレビュー専用依存未注入を安全に拒否する",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useCase := NewVerificationScenarioUseCase(verificationScenarioProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			}, &verificationScenarioRepositoryStub{})
+
+			_, got := useCase.PreviewVerificationRun(context.Background(), "", &draft)
+			if !apperr.IsCode(got, apperr.CodeSchemaLoadFailed) {
+				t.Errorf("PreviewVerificationRun() error code = %v, want %v", apperr.As(got), apperr.CodeSchemaLoadFailed)
+			}
+		})
+	}
 }
 
 // シナリオ作成ユースケース検証
