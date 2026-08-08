@@ -12,7 +12,13 @@ export function DeleteConnectionProfile(arg1:string):Promise<wails.Response_gith
 
 export function DeleteTableRow(arg1:wails.DeleteTableRowRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_AffectedRowsResponse_>;
 
+export function DeleteVerificationScenario(arg1:wails.DeleteVerificationScenarioRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_DeleteScenarioResponse_>;
+
 export function DuplicateVerificationScenario(arg1:string):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationScenarioResponse_>;
+
+export function EnterVerificationWorkspace(arg1:string):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationWorkspaceResponse_>;
+
+export function ExitVerificationWorkspace(arg1:string):Promise<wails.Response_struct____>;
 
 export function GetConfig():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigResponse_>;
 
@@ -36,10 +42,14 @@ export function ListVerificationScenarios():Promise<wails.Response___github_com_
 
 export function LoadFlowState():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_FlowStateResponse_>;
 
+export function PrepareVerificationRun(arg1:wails.PrepareVerificationRunRequest):Promise<wails.Response_struct____>;
+
 export function SaveConnectionProfile(arg1:wails.SaveConnectionProfileRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
 
 export function SaveFlowState(arg1:wails.SaveFlowStateRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_FlowStateResponse_>;
 
 export function UpdateTableCell(arg1:wails.UpdateTableCellRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_AffectedRowsResponse_>;
+
+export function UpdateVerificationRunState(arg1:wails.UpdateVerificationRunStateRequest):Promise<wails.Response_struct____>;
 
 export function UpdateVerificationScenario(arg1:wails.UpdateVerificationScenarioRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationScenarioResponse_>;
