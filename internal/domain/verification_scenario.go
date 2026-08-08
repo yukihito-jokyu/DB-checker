@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -36,6 +37,180 @@ type VerificationScenarioDraft struct {
 	Name         string
 	PrimaryTable string
 	Definition   map[string]any
+}
+
+type VerificationRunPreviewTable struct {
+	Name               string
+	RowCount           int
+	AutomaticallyAdded bool
+	GeneratedColumns   []string
+}
+
+type VerificationRunPreview struct {
+	Ready       bool
+	InsertOrder []VerificationRunPreviewTable
+	DeleteOrder []VerificationRunPreviewTable
+	Warnings    []string
+}
+
+// 検証実行プレビュー生成
+func PreviewVerificationRun(scenario VerificationScenarioDraft, schema Schema) VerificationRunPreview {
+	requestedTables := append([]string{scenario.PrimaryTable}, scenarioChildTables(scenario.Definition)...)
+	rowCounts := scenarioRowCounts(scenario.Definition)
+	generatedColumns := scenarioGeneratedColumns(scenario.Definition)
+	tables := make(map[string]Table, len(schema.Tables))
+	for _, table := range schema.Tables {
+		tables[table.Name] = table
+	}
+
+	warnings := make([]string, 0)
+	for _, table := range requestedTables {
+		if _, found := tables[table]; !found {
+			warnings = append(warnings, "対象テーブルが見つかりません: "+table)
+		}
+	}
+	if len(warnings) > 0 {
+		return VerificationRunPreview{Ready: false, InsertOrder: []VerificationRunPreviewTable{}, DeleteOrder: []VerificationRunPreviewTable{}, Warnings: warnings}
+	}
+
+	requested := make(map[string]struct{}, len(requestedTables))
+	for _, table := range requestedTables {
+		requested[table] = struct{}{}
+	}
+	order, automaticallyAdded, cyclic := previewInsertionOrder(requestedTables, requested, schema.ForeignKeys)
+	if cyclic {
+		warnings = append(warnings, "外部キーの循環参照があるため投入順を確定できません")
+	}
+	for _, table := range order {
+		if !hasPrimaryKey(tables[table]) {
+			warnings = append(warnings, "主キーがありません: "+table)
+		}
+	}
+	if len(warnings) > 0 {
+		return VerificationRunPreview{Ready: false, InsertOrder: []VerificationRunPreviewTable{}, DeleteOrder: []VerificationRunPreviewTable{}, Warnings: warnings}
+	}
+
+	insertOrder := make([]VerificationRunPreviewTable, 0, len(order))
+	for _, table := range order {
+		count := rowCounts[table]
+		if automaticallyAdded[table] {
+			count = dependentRowCount(table, requestedTables, rowCounts, schema.ForeignKeys)
+		}
+		insertOrder = append(insertOrder, VerificationRunPreviewTable{Name: table, RowCount: count, AutomaticallyAdded: automaticallyAdded[table], GeneratedColumns: generatedColumns[table]})
+	}
+	deleteOrder := make([]VerificationRunPreviewTable, len(insertOrder))
+	for index := range insertOrder {
+		deleteOrder[len(insertOrder)-1-index] = insertOrder[index]
+	}
+
+	return VerificationRunPreview{Ready: true, InsertOrder: insertOrder, DeleteOrder: deleteOrder, Warnings: []string{}}
+}
+
+// シナリオ子対象取得
+func scenarioChildTables(definition map[string]any) []string {
+	childTables, _ := scenarioStringSlice(definition["childTables"])
+
+	return childTables
+}
+
+// シナリオ行数取得
+func scenarioRowCounts(definition map[string]any) map[string]int {
+	values, _ := definition["rowCounts"].(map[string]any)
+	rowCounts := make(map[string]int, len(values))
+	for table, value := range values {
+		if number, ok := value.(float64); ok {
+			rowCounts[table] = int(number)
+		}
+	}
+
+	return rowCounts
+}
+
+// シナリオ生成対象列取得
+func scenarioGeneratedColumns(definition map[string]any) map[string][]string {
+	values, _ := definition["columnGenerators"].(map[string]any)
+	columns := make(map[string][]string, len(values))
+	for table, value := range values {
+		rules, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		columns[table] = make([]string, 0, len(rules))
+		for column := range rules {
+			columns[table] = append(columns[table], column)
+		}
+		sort.Strings(columns[table])
+	}
+
+	return columns
+}
+
+// 投入順計算
+func previewInsertionOrder(requestedTables []string, requested map[string]struct{}, foreignKeys []ForeignKey) ([]string, map[string]bool, bool) {
+	parents := make(map[string][]string)
+	for _, foreignKey := range foreignKeys {
+		parents[foreignKey.FromTable] = append(parents[foreignKey.FromTable], foreignKey.ToTable)
+	}
+	for table := range parents {
+		sort.Strings(parents[table])
+	}
+
+	visited := make(map[string]bool)
+	visiting := make(map[string]bool)
+	automaticallyAdded := make(map[string]bool)
+	order := make([]string, 0, len(requestedTables))
+	cyclic := false
+	var visit func(string)
+	visit = func(table string) {
+		if visiting[table] {
+			cyclic = true
+
+			return
+		}
+		if visited[table] {
+			return
+		}
+		visiting[table] = true
+		for _, parent := range parents[table] {
+			if _, selected := requested[parent]; !selected {
+				automaticallyAdded[parent] = true
+			}
+			visit(parent)
+		}
+		delete(visiting, table)
+		visited[table] = true
+		order = append(order, table)
+	}
+	for _, table := range requestedTables {
+		visit(table)
+	}
+
+	return order, automaticallyAdded, cyclic
+}
+
+// 依存先行数算出
+func dependentRowCount(parent string, requestedTables []string, rowCounts map[string]int, foreignKeys []ForeignKey) int {
+	count := 1
+	for _, child := range requestedTables {
+		for _, foreignKey := range foreignKeys {
+			if foreignKey.FromTable == child && foreignKey.ToTable == parent && rowCounts[child] > count {
+				count = rowCounts[child]
+			}
+		}
+	}
+
+	return count
+}
+
+// 主キー存在判定
+func hasPrimaryKey(table Table) bool {
+	for _, column := range table.Columns {
+		if column.IsPrimaryKey {
+			return true
+		}
+	}
+
+	return false
 }
 
 // 検証シナリオ下書き生成
