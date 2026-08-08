@@ -41,7 +41,7 @@ func main() {
 		return
 	}
 	verificationWorkspaceRepository := repository.NewVerificationWorkspaceRepository(appRepository)
-	verificationScenarioUseCase := usecase.NewVerificationScenarioUseCase(appRepository, verificationScenarioRepository, verificationWorkspaceRepository)
+	verificationScenarioUseCase := usecase.NewVerificationScenarioUseCaseWithPreview(appRepository, verificationScenarioRepository, appRepository, verificationWorkspaceRepository)
 	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase, verificationScenarioUseCase)
 
 	err = wails.Run(&options.App{
