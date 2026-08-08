@@ -125,6 +125,121 @@ func (r *verificationScenarioTestRows) Next(dest []driver.Value) error {
 	return io.EOF
 }
 
+// SQLiteシナリオ作成検証
+func TestSQLiteVerificationScenarioRepositoryCreateVerificationScenario(t *testing.T) {
+	createdAt := mustParseScenarioTime(t, "2026-08-08T11:00:00.123456789Z")
+	scenario, err := domain.NewVerificationScenario("scenario-1", "検証", "orders", []byte(`{"z":1,"a":{"id":{"kind":"sequence"}}}`), nil, createdAt, createdAt)
+	if err != nil {
+		t.Fatalf("NewVerificationScenario() error = %v", err)
+	}
+	tests := []struct {
+		name      string
+		profileID string
+		wantFound bool
+	}{
+		{
+			name:      "プロファイルに紐付けてJSONと時刻を保存する",
+			profileID: "profile-1",
+			wantFound: true,
+		},
+		{
+			name:      "別プロファイルからは取得できない",
+			profileID: "profile-2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+			if err := repository.Initialize(context.Background()); err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+			if err := repository.CreateVerificationScenario(context.Background(), "profile-1", scenario); err != nil {
+				t.Fatalf("CreateVerificationScenario() error = %v", err)
+			}
+
+			got, found, err := repository.GetVerificationScenario(context.Background(), tt.profileID, scenario.ID)
+			if err != nil {
+				t.Fatalf("GetVerificationScenario() error = %v", err)
+			}
+			if found != tt.wantFound {
+				t.Fatalf("GetVerificationScenario() found = %v, want %v", found, tt.wantFound)
+			}
+			if !tt.wantFound {
+				return
+			}
+			if !reflect.DeepEqual(got, scenario) {
+				t.Errorf("GetVerificationScenario() = %#v, want %#v", got, scenario)
+			}
+		})
+	}
+}
+
+// SQLiteシナリオ作成障害検証
+func TestSQLiteVerificationScenarioRepositoryCreateVerificationScenarioFailures(t *testing.T) {
+	scenario, err := domain.NewVerificationScenario("scenario-1", "検証", "orders", []byte(`{}`), nil, time.Now().UTC(), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("NewVerificationScenario() error = %v", err)
+	}
+	cyclicDefinition := map[string]any{}
+	cyclicDefinition["cycle"] = cyclicDefinition
+	marshalFailureScenario := domain.VerificationScenario{
+		ID:           "scenario-1",
+		Name:         "検証",
+		PrimaryTable: "orders",
+		Definition:   cyclicDefinition,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	tests := []struct {
+		name     string
+		open     func(string, string) (*sql.DB, error)
+		scenario domain.VerificationScenario
+		want     string
+	}{
+		{
+			name: "データベースオープン失敗",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			scenario: scenario,
+			want:     "open verification scenario database",
+		},
+		{
+			name: "定義JSON符号化失敗",
+			open: verificationScenarioScriptOpener("create-insert-error", verificationScenarioDatabaseScript{
+				exec: func(string) (driver.Result, error) {
+					return nil, errors.New("INSERT should not be called")
+				},
+			}),
+			scenario: marshalFailureScenario,
+			want:     "encode verification scenario definition",
+		},
+		{
+			name: "INSERT失敗",
+			open: verificationScenarioScriptOpener("create-insert-error", verificationScenarioDatabaseScript{
+				exec: func(string) (driver.Result, error) {
+					return nil, errors.New("insert failed")
+				},
+			}),
+			scenario: scenario,
+			want:     "insert verification scenario",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVerificationScenarioOpener(t, tt.open)
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+
+			err := repository.CreateVerificationScenario(context.Background(), "profile-1", tt.scenario)
+			if !containsErrorText(err, tt.want) {
+				t.Errorf("CreateVerificationScenario() error = %v, want text %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // SQLiteシナリオ一覧取得検証
 func TestSQLiteVerificationScenarioRepositoryListVerificationScenarios(t *testing.T) {
 	tests := []struct {
