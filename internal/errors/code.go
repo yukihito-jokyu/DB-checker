@@ -26,6 +26,7 @@ const (
 	CodeRowDeleteFailed           Code = "ROW_DELETE_FAILED"
 	CodeFilterApplyFailed         Code = "FILTER_APPLY_FAILED"
 	CodeSortApplyFailed           Code = "SORT_APPLY_FAILED"
+	CodeScenarioStoreFailed       Code = "SCENARIO_STORE_FAILED"
 	CodeOperationTimeout          Code = "OPERATION_TIMEOUT"
 	CodeOperationCanceled         Code = "OPERATION_CANCELED"
 	CodeUnexpected                Code = "UNEXPECTED"
@@ -54,6 +55,7 @@ var defaultMessages = map[Code]message{ // #nosec G101 -- 利用者向けエラ�
 	CodeRowDeleteFailed:           "行削除に失敗しました",
 	CodeFilterApplyFailed:         "フィルタ適用に失敗しました",
 	CodeSortApplyFailed:           "並び替えに失敗しました",
+	CodeScenarioStoreFailed:       "検証シナリオの読み込みに失敗しました",
 	CodeOperationTimeout:          "処理がタイムアウトしました",
 	CodeOperationCanceled:         "処理がキャンセルされました",
 	CodeUnexpected:                "予期しないエラーが発生しました",

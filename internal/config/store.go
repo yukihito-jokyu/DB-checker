@@ -26,6 +26,9 @@ func NewDefaultStore() (*Store, error) {
 // 設定ストア生成
 func NewStore(baseDir string) *Store { return &Store{baseDir: baseDir} }
 
+// 設定ディレクトリ取得
+func (s *Store) Directory() string { return s.baseDir }
+
 // 設定ファイルパス取得
 func (s *Store) Path() string { return filepath.Join(s.baseDir, FileName) }
 

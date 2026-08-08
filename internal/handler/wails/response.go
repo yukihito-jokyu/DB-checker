@@ -39,6 +39,13 @@ type ConnectionProfilesResponse struct {
 	ActiveConnectionProfileID *string           `json:"activeConnectionProfileId"`
 }
 
+type VerificationScenarioSummaryResponse struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	PrimaryTable string `json:"primaryTable"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
 type SaveConnectionProfileRequest struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`

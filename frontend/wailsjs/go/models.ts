@@ -610,6 +610,56 @@ export namespace wails {
 	    }
 	}
 
+	export class VerificationScenarioSummaryResponse {
+	    id: string;
+	    name: string;
+	    primaryTable: string;
+	    updatedAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VerificationScenarioSummaryResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.primaryTable = source["primaryTable"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class Response___github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationScenarioSummaryResponse_ {
+	    data?: VerificationScenarioSummaryResponse[];
+	    error?: ErrorResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new Response___github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationScenarioSummaryResponse_(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], VerificationScenarioSummaryResponse);
+	        this.error = this.convertValues(source["error"], ErrorResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_AffectedRowsResponse_ {
 	    data?: AffectedRowsResponse;
 	    error?: ErrorResponse;
