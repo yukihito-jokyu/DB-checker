@@ -277,6 +277,54 @@ func (u *AppUseCase) UpdateTableCell(ctx context.Context, change domain.CellUpda
 	return affected, nil
 }
 
+// テーブル行削除
+func (u *AppUseCase) DeleteTableRow(ctx context.Context, table string, locator domain.RowLocator) (domain.AffectedRows, error) {
+	profiles, activeID, err := u.repository.LoadProfiles()
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+	if activeID == nil {
+		return domain.AffectedRows{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	profile, found := findProfile(profiles, *activeID)
+	if !found {
+		return domain.AffectedRows{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	ref, err := domain.NewTableRef(schemaNamespace(profile), table)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	credential, found, err := u.repository.GetCredential(profile.ID)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeCredentialUnavailable, err)
+	}
+	if !found {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeCredentialUnavailable, errors.New("credential not found"))
+	}
+
+	structure, err := u.repository.InspectTableStructure(ctx, profile, credential, ref)
+	if err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeRowDeleteFailed, err)
+	}
+	if err := locator.Validate(ref, structure.Table.Columns); err != nil {
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	affected, err := u.repository.DeleteRow(ctx, profile, credential, ref, locator)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalidRowInput) {
+			return domain.AffectedRows{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+		}
+
+		return domain.AffectedRows{}, apperr.Wrap(apperr.CodeRowDeleteFailed, err)
+	}
+
+	return affected, nil
+}
+
 // 問い合わせ列存在判定
 func tableQueryHasColumn(columns []domain.Column, name string) bool {
 	for _, column := range columns {

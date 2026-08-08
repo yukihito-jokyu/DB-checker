@@ -353,12 +353,14 @@ func TestAppUseCaseInsertTableRowIntegration(t *testing.T) {
 			useCase := NewAppUseCase(appRepository)
 
 			name := "Inserted User"
+			insertedID := "3"
 			row := domain.InsertRow{
 				Table: domain.TableRef{Name: "schema_child"},
 				Values: []domain.ColumnValueInput{
 					{
 						Column: "id",
-						Kind:   domain.CellKindDefault,
+						Kind:   domain.CellKindValue,
+						Value:  &insertedID,
 					},
 					{
 						Column: "parent_a",
@@ -400,6 +402,109 @@ func TestAppUseCaseInsertTableRowIntegration(t *testing.T) {
 				t.Errorf("AffectedRows = %d, want 1", affected.AffectedRows)
 			}
 
+		})
+	}
+}
+
+// テーブル行削除結合検証
+func TestAppUseCaseDeleteTableRowIntegration(t *testing.T) {
+	targets, err := db.TargetsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			database := integrationDatabase(t, target)
+			defer database.Close()
+			adminDatabase := integrationAdminDatabase(t, target)
+			if adminDatabase != nil {
+				defer adminDatabase.Close()
+			}
+			defer integrationSchemaCleanup(t, database, adminDatabase, target.Kind)
+			integrationSchemaSeed(t, database, adminDatabase, target.Kind)
+
+			if _, err := database.Exec("INSERT INTO schema_parent (part_a, part_b, code) VALUES (1, 10, 'delete-parent')"); err != nil {
+				t.Fatalf("Exec parent seed error = %v", err)
+			}
+			if _, err := database.Exec("INSERT INTO schema_child (id, parent_a, parent_b, status, note, metadata) VALUES (1, 1, 10, 'delete', NULL, '{}'), (2, 1, 10, 'keep', 'note', '{}')"); err != nil {
+				t.Fatalf("Exec child seed error = %v", err)
+			}
+			if _, err := database.Exec("CREATE TABLE delete_no_pk (id INTEGER NOT NULL, note VARCHAR(32) NULL)"); err != nil {
+				t.Fatalf("CREATE TABLE delete_no_pk error = %v", err)
+			}
+			defer func() {
+				if _, err := database.Exec("DROP TABLE IF EXISTS delete_no_pk"); err != nil {
+					t.Errorf("DROP TABLE delete_no_pk error = %v", err)
+				}
+			}()
+			if _, err := database.Exec("INSERT INTO delete_no_pk (id, note) VALUES (1, NULL), (2, 'keep')"); err != nil {
+				t.Fatalf("Exec delete_no_pk seed error = %v", err)
+			}
+
+			appRepository, _, _ := integrationInspectionRepository(t, target)
+			useCase := NewAppUseCase(appRepository)
+			id := "1"
+			affected, err := useCase.DeleteTableRow(context.Background(), "schema_child", domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindValue,
+						Value:  &id,
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("DeleteTableRow() primary key error = %v", err)
+			}
+			if affected.AffectedRows != 1 {
+				t.Errorf("primary key affected rows = %d, want 1", affected.AffectedRows)
+			}
+
+			var childCount int
+			if err := database.QueryRow("SELECT COUNT(*) FROM schema_child WHERE id = 1").Scan(&childCount); err != nil {
+				t.Fatalf("QueryRow deleted child error = %v", err)
+			}
+			if childCount != 0 {
+				t.Errorf("deleted child count = %d, want 0", childCount)
+			}
+
+			rowID := "1"
+			nullLocator := domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindValue,
+						Value:  &rowID,
+					},
+					{
+						Column: "note",
+						Kind:   domain.CellKindNull,
+					},
+				},
+			}
+			affected, err = useCase.DeleteTableRow(context.Background(), "delete_no_pk", nullLocator)
+			if err != nil {
+				t.Fatalf("DeleteTableRow() NULL locator error = %v", err)
+			}
+			if affected.AffectedRows != 1 {
+				t.Errorf("NULL locator affected rows = %d, want 1", affected.AffectedRows)
+			}
+
+			affected, err = useCase.DeleteTableRow(context.Background(), "schema_child", domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindValue,
+						Value:  integrationStringPtr("999"),
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("DeleteTableRow() missing row error = %v", err)
+			}
+			if affected.AffectedRows != 0 {
+				t.Errorf("missing row affected rows = %d, want 0", affected.AffectedRows)
+			}
 		})
 	}
 }

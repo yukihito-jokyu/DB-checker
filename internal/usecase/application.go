@@ -22,6 +22,7 @@ type AppRepository interface {
 	ListRows(context.Context, domain.Profile, string, domain.TableQuery) (domain.TableRows, error)
 	InsertRow(context.Context, domain.Profile, string, domain.TableRef, domain.InsertRow) (domain.AffectedRows, error)
 	UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error)
+	DeleteRow(context.Context, domain.Profile, string, domain.TableRef, domain.RowLocator) (domain.AffectedRows, error)
 }
 
 // アプリケーションユースケース
