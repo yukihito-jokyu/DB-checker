@@ -288,6 +288,158 @@ func TestSQLiteVerificationScenarioRepositoryListVerificationScenariosFailures(t
 	}
 }
 
+// SQLiteシナリオ詳細取得検証
+func TestSQLiteVerificationScenarioRepositoryGetVerificationScenario(t *testing.T) {
+	updatedAt := "2026-08-08T12:00:00.123456789Z"
+	workspaceName := "verification_orders"
+	tests := []struct {
+		name       string
+		seed       []verificationScenarioSeed
+		profileID  string
+		scenarioID string
+		wantFound  bool
+		want       domain.VerificationScenario
+	}{
+		{
+			name: "同一プロファイルの詳細を返す",
+			seed: []verificationScenarioSeed{
+				{
+					id:             "scenario-1",
+					profileID:      "profile-1",
+					name:           "検証",
+					primaryTable:   "orders",
+					definitionJSON: `{"rowCounts":{"orders":10}}`,
+					workspaceName:  &workspaceName,
+					createdAt:      "2026-08-08T11:00:00Z",
+					updatedAt:      updatedAt,
+				},
+			},
+			profileID:  "profile-1",
+			scenarioID: "scenario-1",
+			wantFound:  true,
+			want: domain.VerificationScenario{
+				ID:           "scenario-1",
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition: map[string]any{
+					"rowCounts": map[string]any{
+						"orders": float64(10),
+					},
+				},
+				WorkspaceName: &workspaceName,
+				CreatedAt:     mustParseScenarioTime(t, "2026-08-08T11:00:00Z"),
+				UpdatedAt:     mustParseScenarioTime(t, updatedAt),
+			},
+		},
+		{
+			name: "他プロファイルのシナリオを返さない",
+			seed: []verificationScenarioSeed{
+				{
+					id:           "scenario-1",
+					profileID:    "profile-2",
+					name:         "検証",
+					primaryTable: "orders",
+					createdAt:    "2026-08-08T11:00:00Z",
+					updatedAt:    updatedAt,
+				},
+			},
+			profileID:  "profile-1",
+			scenarioID: "scenario-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+			for _, seed := range tt.seed {
+				seedVerificationScenario(t, repository.databasePath, seed)
+			}
+
+			got, found, err := repository.GetVerificationScenario(context.Background(), tt.profileID, tt.scenarioID)
+			if err != nil {
+				t.Fatalf("GetVerificationScenario() error = %v", err)
+			}
+			if found != tt.wantFound {
+				t.Fatalf("GetVerificationScenario() found = %v, want %v", found, tt.wantFound)
+			}
+			if !tt.wantFound {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetVerificationScenario() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// SQLiteシナリオ詳細取得障害検証
+func TestSQLiteVerificationScenarioRepositoryGetVerificationScenarioFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(string, string) (*sql.DB, error)
+		want string
+	}{
+		{
+			name: "データベースオープン失敗",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			want: "open verification scenario database",
+		},
+		{
+			name: "詳細クエリ失敗",
+			open: verificationScenarioScriptOpener("get-query-error", verificationScenarioDatabaseScript{
+				query: func(string) (driver.Rows, error) {
+					return nil, errors.New("get query failed")
+				},
+			}),
+			want: "query verification scenario",
+		},
+		{
+			name: "不正な作成日時",
+			open: verificationScenarioScriptOpener("get-created-time-error", verificationScenarioDatabaseScript{
+				query: func(string) (driver.Rows, error) {
+					return verificationScenarioDetailRows("scenario-1", "name", "table", `{}`, nil, "invalid", "2026-08-08T12:00:00Z"), nil
+				},
+			}),
+			want: "parse verification scenario created time",
+		},
+		{
+			name: "不正な更新日時",
+			open: verificationScenarioScriptOpener("get-updated-time-error", verificationScenarioDatabaseScript{
+				query: func(string) (driver.Rows, error) {
+					return verificationScenarioDetailRows("scenario-1", "name", "table", `{}`, nil, "2026-08-08T11:00:00Z", "invalid"), nil
+				},
+			}),
+			want: "parse verification scenario updated time",
+		},
+		{
+			name: "不正な定義JSON",
+			open: verificationScenarioScriptOpener("get-definition-error", verificationScenarioDatabaseScript{
+				query: func(string) (driver.Rows, error) {
+					return verificationScenarioDetailRows("scenario-1", "name", "table", `{`, nil, "2026-08-08T11:00:00Z", "2026-08-08T12:00:00Z"), nil
+				},
+			}),
+			want: "decode verification scenario",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVerificationScenarioOpener(t, tt.open)
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+
+			_, _, err := repository.GetVerificationScenario(context.Background(), "profile-1", "scenario-1")
+			if err == nil {
+				t.Fatal("GetVerificationScenario() error = nil, want error")
+			}
+			if !containsErrorText(err, tt.want) {
+				t.Errorf("GetVerificationScenario() error = %v, want text %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // SQLiteシナリオDB初期化検証
 func TestSQLiteVerificationScenarioRepositoryInitialize(t *testing.T) {
 	tests := []struct {
@@ -479,11 +631,14 @@ func TestNewSQLiteVerificationScenarioRepository(t *testing.T) {
 }
 
 type verificationScenarioSeed struct {
-	id           string
-	profileID    string
-	name         string
-	primaryTable string
-	updatedAt    string
+	id             string
+	profileID      string
+	name           string
+	primaryTable   string
+	definitionJSON string
+	workspaceName  *string
+	createdAt      string
+	updatedAt      string
 }
 
 // シナリオDBシード
@@ -498,7 +653,15 @@ func seedVerificationScenario(t *testing.T, databasePath string, seed verificati
 		t.Fatalf("sql.Open() error = %v", err)
 	}
 	defer database.Close()
-	if _, err := database.ExecContext(context.Background(), `INSERT INTO scenarios (id, profile_id, name, primary_table, definition_json, created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)`, seed.id, seed.profileID, seed.name, seed.primaryTable, seed.updatedAt, seed.updatedAt); err != nil {
+	definitionJSON := seed.definitionJSON
+	if definitionJSON == "" {
+		definitionJSON = "{}"
+	}
+	createdAt := seed.createdAt
+	if createdAt == "" {
+		createdAt = seed.updatedAt
+	}
+	if _, err := database.ExecContext(context.Background(), `INSERT INTO scenarios (id, profile_id, name, primary_table, definition_json, workspace_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, seed.id, seed.profileID, seed.name, seed.primaryTable, definitionJSON, seed.workspaceName, createdAt, seed.updatedAt); err != nil {
 		t.Fatalf("INSERT scenarios error = %v", err)
 	}
 }
@@ -571,6 +734,37 @@ func verificationScenarioRows(id, name, primaryTable, updatedAt string) *verific
 				id,
 				name,
 				primaryTable,
+				updatedAt,
+			},
+		},
+	}
+}
+
+// シナリオ詳細行生成
+func verificationScenarioDetailRows(id, name, primaryTable, definitionJSON string, workspaceName *string, createdAt, updatedAt string) *verificationScenarioTestRows {
+	var workspaceValue driver.Value
+	if workspaceName != nil {
+		workspaceValue = *workspaceName
+	}
+
+	return &verificationScenarioTestRows{
+		columns: []string{
+			"id",
+			"name",
+			"primary_table",
+			"definition_json",
+			"workspace_name",
+			"created_at",
+			"updated_at",
+		},
+		values: [][]driver.Value{
+			{
+				id,
+				name,
+				primaryTable,
+				definitionJSON,
+				workspaceValue,
+				createdAt,
 				updatedAt,
 			},
 		},

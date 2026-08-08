@@ -19,6 +19,8 @@ type verificationScenarioProfilesStub struct {
 
 type verificationScenarioRepositoryStub struct {
 	scenarios []domain.VerificationScenarioSummary
+	scenario  domain.VerificationScenario
+	found     bool
 	err       error
 	profileID string
 }
@@ -33,6 +35,114 @@ func (s *verificationScenarioRepositoryStub) ListVerificationScenarios(_ context
 	s.profileID = profileID
 
 	return s.scenarios, s.err
+}
+
+// シナリオ詳細取得再現
+func (s *verificationScenarioRepositoryStub) GetVerificationScenario(_ context.Context, profileID, _ string) (domain.VerificationScenario, bool, error) {
+	s.profileID = profileID
+
+	return s.scenario, s.found, s.err
+}
+
+// シナリオ詳細ユースケース検証
+func TestVerificationScenarioUseCaseGetVerificationScenario(t *testing.T) {
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	scenario, err := domain.NewVerificationScenario("scenario-1", "検証", "orders", []byte(`{"rowCounts":{"orders":10}}`), nil, time.Date(2026, time.August, 8, 11, 0, 0, 0, time.UTC), time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("NewVerificationScenario() error = %v", err)
+	}
+	tests := []struct {
+		name        string
+		profiles    []domain.Profile
+		activeID    *string
+		profilesErr error
+		repository  verificationScenarioRepositoryStub
+		want        domain.VerificationScenario
+		wantCode    apperr.Code
+	}{
+		{
+			name: "詳細返却",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario: scenario,
+				found:    true,
+			},
+			want: scenario,
+		},
+		{
+			name:        "プロファイル読込失敗",
+			profilesErr: errors.New("read profiles failed"),
+		},
+		{
+			name: "アクティブプロファイルなし",
+			profiles: []domain.Profile{
+				profile,
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "他プロファイルのシナリオ",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			wantCode: apperr.CodeScenarioNotFound,
+		},
+		{
+			name: "ストア障害",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				err: errors.New("sqlite path=/private/secret"),
+			},
+			wantCode: apperr.CodeScenarioStoreFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			profiles := verificationScenarioProfilesStub{
+				profiles: tt.profiles,
+				activeID: tt.activeID,
+				err:      tt.profilesErr,
+			}
+			useCase := NewVerificationScenarioUseCase(profiles, &repository)
+
+			got, err := useCase.GetVerificationScenario(context.Background(), "scenario-1")
+			if tt.profilesErr != nil {
+				if !errors.Is(err, tt.profilesErr) {
+					t.Errorf("GetVerificationScenario() error = %v, want wrapped %v", err, tt.profilesErr)
+				}
+
+				return
+			}
+			if tt.wantCode != "" {
+				if !apperr.IsCode(err, tt.wantCode) {
+					t.Errorf("GetVerificationScenario() error code = %v, want %v", apperr.As(err), tt.wantCode)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetVerificationScenario() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("GetVerificationScenario() = %#v, want %#v", got, tt.want)
+			}
+			if repository.profileID != profile.ID {
+				t.Errorf("GetVerificationScenario() profile ID = %q, want %q", repository.profileID, profile.ID)
+			}
+		})
+	}
 }
 
 // シナリオ一覧ユースケース検証
