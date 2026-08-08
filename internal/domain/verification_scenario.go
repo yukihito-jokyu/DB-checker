@@ -115,6 +115,16 @@ func (d VerificationScenarioDraft) NewVerificationScenario(id string, createdAt 
 	return NewVerificationScenario(id, d.Name, d.PrimaryTable, definitionJSON, nil, createdAt, createdAt)
 }
 
+// 複製用検証シナリオ生成
+func (s VerificationScenario) DuplicateVerificationScenario(id string, createdAt time.Time) (VerificationScenario, error) {
+	draft, err := NewVerificationScenarioDraft(s.Name, s.PrimaryTable, s.Definition)
+	if err != nil {
+		return VerificationScenario{}, err
+	}
+
+	return draft.NewVerificationScenario(id, createdAt)
+}
+
 // 更新用検証シナリオ生成
 func (d VerificationScenarioDraft) UpdateVerificationScenario(scenario VerificationScenario, updatedAt time.Time) (VerificationScenario, error) {
 	if scenario.ID == "" {
