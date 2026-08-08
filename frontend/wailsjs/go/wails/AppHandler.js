@@ -38,6 +38,10 @@ export function GetTableStructure(arg1) {
   return window['go']['wails']['AppHandler']['GetTableStructure'](arg1);
 }
 
+export function GetVerificationScenario(arg1) {
+  return window['go']['wails']['AppHandler']['GetVerificationScenario'](arg1);
+}
+
 export function InsertTableRow(arg1) {
   return window['go']['wails']['AppHandler']['InsertTableRow'](arg1);
 }
