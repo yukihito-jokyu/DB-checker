@@ -46,6 +46,17 @@ type VerificationScenarioSummaryResponse struct {
 	UpdatedAt    string `json:"updatedAt"`
 }
 
+type VerificationScenarioResponse struct {
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	PrimaryTable  string         `json:"primaryTable"`
+	Definition    map[string]any `json:"definition"`
+	WorkspaceName *string        `json:"workspaceName"`
+	CreatedAt     string         `json:"createdAt"`
+	UpdatedAt     string         `json:"updatedAt"`
+	LatestRun     any            `json:"latestRun"`
+}
+
 type SaveConnectionProfileRequest struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
