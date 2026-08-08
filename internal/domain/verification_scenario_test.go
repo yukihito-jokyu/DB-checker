@@ -571,6 +571,77 @@ func repeatedStatements(count int) []string {
 	return statements
 }
 
+// 検証シナリオ複製検証
+func TestVerificationScenarioDuplicateVerificationScenario(t *testing.T) {
+	workspaceName := "verification_orders"
+	scenario := VerificationScenario{
+		ID:            "scenario-1",
+		Name:          "検証",
+		PrimaryTable:  "orders",
+		Definition:    validVerificationScenarioDefinition(),
+		WorkspaceName: &workspaceName,
+		CreatedAt:     time.Date(2026, time.August, 8, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:     time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC),
+	}
+	createdAt := time.Date(2026, time.August, 8, 13, 0, 0, 0, time.FixedZone("JST", 9*60*60))
+	tests := []struct {
+		name      string
+		id        string
+		scenario  VerificationScenario
+		wantError error
+	}{
+		{
+			name:     "新しいIDと独立した定義で複製する",
+			id:       "scenario-2",
+			scenario: scenario,
+		},
+		{
+			name:      "空IDを拒否する",
+			scenario:  scenario,
+			wantError: ErrInvalidVerificationScenarioDraft,
+		},
+		{
+			name: "不正な定義を拒否する",
+			id:   "scenario-2",
+			scenario: VerificationScenario{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			},
+			wantError: ErrInvalidVerificationScenarioDraft,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.scenario.DuplicateVerificationScenario(tt.id, createdAt)
+			if tt.wantError != nil {
+				if !errors.Is(err, tt.wantError) {
+					t.Errorf("DuplicateVerificationScenario() error = %v, want %v", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("DuplicateVerificationScenario() error = %v", err)
+			}
+			if got.ID != tt.id || got.Name != scenario.Name || got.PrimaryTable != scenario.PrimaryTable {
+				t.Errorf("DuplicateVerificationScenario() = %#v, want copied identity fields", got)
+			}
+			if got.WorkspaceName != nil {
+				t.Errorf("WorkspaceName = %v, want nil", got.WorkspaceName)
+			}
+			if !got.CreatedAt.Equal(createdAt.UTC()) || !got.UpdatedAt.Equal(createdAt.UTC()) {
+				t.Errorf("timestamps = %v, %v, want %v", got.CreatedAt, got.UpdatedAt, createdAt.UTC())
+			}
+			got.Definition["rowCounts"].(map[string]any)["orders"] = float64(99)
+			if scenario.Definition["rowCounts"].(map[string]int)["orders"] != 1 {
+				t.Errorf("source Definition = %#v, want unchanged", scenario.Definition)
+			}
+		})
+	}
+}
+
 // シナリオ下書きの更新用変換検証
 func TestVerificationScenarioDraftUpdateVerificationScenario(t *testing.T) {
 	workspaceName := "verification_orders"

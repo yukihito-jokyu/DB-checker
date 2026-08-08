@@ -27,6 +27,7 @@ type verificationScenarioHandlerRepositoryStub struct {
 	scenario    domain.VerificationScenario
 	found       bool
 	err         error
+	createErr   error
 	createCalls *int
 	updateCalls *int
 	updateFound bool
@@ -51,6 +52,10 @@ func (s verificationScenarioHandlerRepositoryStub) GetVerificationScenario(_ con
 func (s verificationScenarioHandlerRepositoryStub) CreateVerificationScenario(_ context.Context, _ string, _ domain.VerificationScenario) error {
 	if s.createCalls != nil {
 		*s.createCalls++
+	}
+
+	if s.createErr != nil {
+		return s.createErr
 	}
 
 	return s.err
@@ -495,6 +500,136 @@ func TestAppHandlerGetVerificationScenario(t *testing.T) {
 			}
 			if bytes.Contains(output.Bytes(), []byte("secret")) || bytes.Contains(output.Bytes(), []byte("verification.sqlite3")) {
 				t.Errorf("log = %q, must not contain sensitive details", output.String())
+			}
+		})
+	}
+}
+
+// シナリオ複製ハンドラー応答検証
+func TestAppHandlerDuplicateVerificationScenario(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	workspaceName := "verification_orders"
+	scenario := domain.VerificationScenario{
+		ID:            "scenario-1",
+		Name:          "検証",
+		PrimaryTable:  "orders",
+		Definition:    validCreateVerificationScenarioRequest().Definition,
+		WorkspaceName: &workspaceName,
+		CreatedAt:     time.Date(2026, time.August, 8, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:     time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC),
+	}
+	tests := []struct {
+		name            string
+		useCaseNil      bool
+		profiles        verificationScenarioHandlerProfilesStub
+		repository      verificationScenarioHandlerRepositoryStub
+		wantCode        apperr.Code
+		wantCreateCalls int
+		sensitiveTexts  []string
+	}{
+		{
+			name: "複製結果をDTOで返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{
+					profile,
+				},
+				activeID: stringPointer(profile.ID),
+			},
+			repository: verificationScenarioHandlerRepositoryStub{
+				scenario: scenario,
+				found:    true,
+			},
+			wantCreateCalls: 1,
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			useCaseNil: true,
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "他プロファイルのシナリオを安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{
+					profile,
+				},
+				activeID: stringPointer(profile.ID),
+			},
+			wantCode: apperr.CodeScenarioNotFound,
+		},
+		{
+			name: "保存失敗時に機密情報を応答とログへ出さない",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{
+					profile,
+				},
+				activeID: stringPointer(profile.ID),
+			},
+			repository: verificationScenarioHandlerRepositoryStub{
+				scenario: scenario,
+				found:    true,
+				createErr: errors.New(
+					"postgres://db-user:db-password@db.example.test:5432/verification",
+				),
+			},
+			wantCode:        apperr.CodeScenarioStoreFailed,
+			wantCreateCalls: 1,
+			sensitiveTexts: []string{
+				"db-user",
+				"db-password",
+				"db.example.test",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			createCalls := 0
+			tt.repository.createCalls = &createCalls
+			var scenarioUseCase *usecase.VerificationScenarioUseCase
+			if !tt.useCaseNil {
+				scenarioUseCase = usecase.NewVerificationScenarioUseCase(tt.profiles, tt.repository)
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), nil, scenarioUseCase)
+
+			got := handler.DuplicateVerificationScenario("scenario-1")
+			if tt.wantCode == "" {
+				if got.Error != nil {
+					t.Fatalf("DuplicateVerificationScenario() Error = %#v, want nil", got.Error)
+				}
+				if got.Data == nil {
+					t.Fatal("DuplicateVerificationScenario() Data = nil, want non-nil")
+				}
+				if got.Data.ID == scenario.ID || got.Data.ID == "" || got.Data.Name != scenario.Name || got.Data.WorkspaceName != nil {
+					t.Errorf("DuplicateVerificationScenario() Data = %#v, want new ID, copied definition, and nil workspace", got.Data)
+				}
+			} else {
+				if got.Data != nil {
+					t.Errorf("DuplicateVerificationScenario() Data = %#v, want nil", got.Data)
+				}
+				if got.Error == nil {
+					t.Fatal("DuplicateVerificationScenario() Error = nil, want error response")
+				}
+				if got.Error.Code != string(tt.wantCode) {
+					t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+				}
+				if got.Error.Message == "" || bytes.Contains([]byte(got.Error.Message), []byte("secret")) {
+					t.Errorf("Error.Message = %q, want safe non-empty message", got.Error.Message)
+				}
+				if !bytes.Contains(output.Bytes(), []byte("code="+string(tt.wantCode))) {
+					t.Errorf("log = %q, want code=%s", output.String(), tt.wantCode)
+				}
+				for _, sensitiveText := range tt.sensitiveTexts {
+					if bytes.Contains([]byte(got.Error.Message), []byte(sensitiveText)) {
+						t.Errorf("Error.Message = %q, must not contain %q", got.Error.Message, sensitiveText)
+					}
+					if bytes.Contains(output.Bytes(), []byte(sensitiveText)) {
+						t.Errorf("log = %q, must not contain %q", output.String(), sensitiveText)
+					}
+				}
+			}
+			if createCalls != tt.wantCreateCalls {
+				t.Errorf("CreateVerificationScenario() calls = %d, want %d", createCalls, tt.wantCreateCalls)
 			}
 		})
 	}

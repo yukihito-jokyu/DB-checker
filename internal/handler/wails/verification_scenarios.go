@@ -124,6 +124,26 @@ func (h *AppHandler) GetVerificationScenario(scenarioID string) Response[Verific
 	return OK(verificationScenarioResponse(scenario))
 }
 
+// 検証シナリオ複製
+func (h *AppHandler) DuplicateVerificationScenario(scenarioID string) Response[VerificationScenarioResponse] {
+	h.logger.Info(context.Background(), "verification scenario duplicate requested", slog.String("operation", "verification_scenario_duplicate"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification scenario duplicate failed", "verification_scenario_duplicate", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	scenario, err := h.verificationScenarios.DuplicateVerificationScenario(context.Background(), scenarioID)
+	if err != nil {
+		h.logFailureWithCode("verification scenario duplicate failed", "verification_scenario_duplicate", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	return OK(verificationScenarioResponse(scenario))
+}
+
 // 検証シナリオ応答変換
 func verificationScenarioResponse(scenario domain.VerificationScenario) VerificationScenarioResponse {
 	return VerificationScenarioResponse{

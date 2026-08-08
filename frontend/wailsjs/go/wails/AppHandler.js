@@ -22,6 +22,10 @@ export function DeleteTableRow(arg1) {
   return window['go']['wails']['AppHandler']['DeleteTableRow'](arg1);
 }
 
+export function DuplicateVerificationScenario(arg1) {
+  return window['go']['wails']['AppHandler']['DuplicateVerificationScenario'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['wails']['AppHandler']['GetConfig']();
 }

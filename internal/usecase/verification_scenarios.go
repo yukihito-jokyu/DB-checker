@@ -69,6 +69,39 @@ func (u *VerificationScenarioUseCase) GetVerificationScenario(ctx context.Contex
 	return scenario, nil
 }
 
+// アクティブプロファイルのシナリオ複製
+func (u *VerificationScenarioUseCase) DuplicateVerificationScenario(ctx context.Context, scenarioID string) (domain.VerificationScenario, error) {
+	profiles, activeID, err := u.profiles.LoadProfiles()
+	if err != nil {
+		return domain.VerificationScenario{}, err
+	}
+	if activeID == nil || !containsVerificationScenarioProfile(profiles, *activeID) {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	existing, found, err := u.repository.GetVerificationScenario(ctx, *activeID, scenarioID)
+	if err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+	}
+	if !found {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeScenarioNotFound)
+	}
+
+	scenario, err := existing.DuplicateVerificationScenario(uuid.NewString(), time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+			return domain.VerificationScenario{}, apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+		}
+
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+	if err := u.repository.CreateVerificationScenario(ctx, *activeID, scenario); err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+	}
+
+	return scenario, nil
+}
+
 // アクティブプロファイルのシナリオ更新
 func (u *VerificationScenarioUseCase) UpdateVerificationScenario(ctx context.Context, scenarioID string, draft domain.VerificationScenarioDraft) (domain.VerificationScenario, error) {
 	profiles, activeID, err := u.profiles.LoadProfiles()

@@ -22,6 +22,8 @@ type verificationScenarioRepositoryStub struct {
 	scenario    domain.VerificationScenario
 	found       bool
 	err         error
+	getErr      error
+	createErr   error
 	profileID   string
 	created     domain.VerificationScenario
 	createCalls int
@@ -47,6 +49,10 @@ func (s *verificationScenarioRepositoryStub) ListVerificationScenarios(_ context
 func (s *verificationScenarioRepositoryStub) GetVerificationScenario(_ context.Context, profileID, _ string) (domain.VerificationScenario, bool, error) {
 	s.profileID = profileID
 
+	if s.getErr != nil {
+		return domain.VerificationScenario{}, false, s.getErr
+	}
+
 	return s.scenario, s.found, s.err
 }
 
@@ -55,6 +61,10 @@ func (s *verificationScenarioRepositoryStub) CreateVerificationScenario(_ contex
 	s.profileID = profileID
 	s.created = scenario
 	s.createCalls++
+
+	if s.createErr != nil {
+		return s.createErr
+	}
 
 	return s.err
 }
@@ -339,6 +349,182 @@ func TestVerificationScenarioUseCaseGetVerificationScenario(t *testing.T) {
 			}
 			if repository.profileID != profile.ID {
 				t.Errorf("GetVerificationScenario() profile ID = %q, want %q", repository.profileID, profile.ID)
+			}
+		})
+	}
+}
+
+// シナリオ複製ユースケース検証
+func TestVerificationScenarioUseCaseDuplicateVerificationScenario(t *testing.T) {
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	workspaceName := "verification_orders"
+	existing := domain.VerificationScenario{
+		ID:            "scenario-1",
+		Name:          "検証",
+		PrimaryTable:  "orders",
+		Definition:    verificationScenarioDefinition(),
+		WorkspaceName: &workspaceName,
+		CreatedAt:     time.Date(2026, time.August, 8, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:     time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC),
+	}
+	expectedDefinition := newVerificationScenarioDraft(t).Definition
+	tests := []struct {
+		name            string
+		profiles        []domain.Profile
+		activeID        *string
+		profilesErr     error
+		repository      verificationScenarioRepositoryStub
+		wantCode        apperr.Code
+		wantCreateCalls int
+	}{
+		{
+			name: "同一アクティブプロファイルへ定義だけを複製する",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario: existing,
+				found:    true,
+			},
+			wantCreateCalls: 1,
+		},
+		{
+			name:        "プロファイル読込失敗",
+			profilesErr: errors.New("read profiles failed"),
+		},
+		{
+			name: "他プロファイルのシナリオを見つけない",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			wantCode: apperr.CodeScenarioNotFound,
+		},
+		{
+			name: "詳細取得失敗",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				getErr: errors.New("sqlite path=/private/secret"),
+			},
+			wantCode: apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "アクティブプロファイルなし",
+			profiles: []domain.Profile{
+				profile,
+			},
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "保存失敗",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario:  existing,
+				found:     true,
+				createErr: errors.New("sqlite path=/private/secret"),
+			},
+			wantCode:        apperr.CodeScenarioStoreFailed,
+			wantCreateCalls: 1,
+		},
+		{
+			name: "保存済みシナリオの形式違反",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario: domain.VerificationScenario{
+					Name:         "検証",
+					PrimaryTable: "orders",
+					Definition:   map[string]any{},
+				},
+				found: true,
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "保存済みシナリオの主対象PK不足",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario: domain.VerificationScenario{
+					Name:         "検証",
+					PrimaryTable: "orders",
+					Definition: map[string]any{
+						"childTables": []any{},
+						"rowCounts": map[string]any{
+							"orders": float64(1),
+						},
+						"columnGenerators": map[string]any{
+							"orders": map[string]any{"id": map[string]any{"kind": "fixed"}},
+						},
+						"sql":              []any{"SELECT 1"},
+						"warmupRuns":       float64(0),
+						"iterations":       float64(1),
+						"timeLimitSeconds": float64(1),
+					},
+				},
+				found: true,
+			},
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			profiles := verificationScenarioProfilesStub{
+				profiles: tt.profiles,
+				activeID: tt.activeID,
+				err:      tt.profilesErr,
+			}
+			useCase := NewVerificationScenarioUseCase(profiles, &repository)
+
+			got, err := useCase.DuplicateVerificationScenario(context.Background(), "scenario-1")
+			if tt.profilesErr != nil {
+				if !errors.Is(err, tt.profilesErr) {
+					t.Errorf("DuplicateVerificationScenario() error = %v, want wrapped %v", err, tt.profilesErr)
+				}
+
+				return
+			}
+			if tt.wantCode != "" {
+				if !apperr.IsCode(err, tt.wantCode) {
+					t.Errorf("DuplicateVerificationScenario() error code = %v, want %v", apperr.As(err), tt.wantCode)
+				}
+			} else if err != nil {
+				t.Fatalf("DuplicateVerificationScenario() error = %v", err)
+			} else {
+				if got.ID == existing.ID || got.ID == "" {
+					t.Errorf("ID = %q, want new non-empty ID", got.ID)
+				}
+				if got.Name != existing.Name || got.PrimaryTable != existing.PrimaryTable || !reflect.DeepEqual(got.Definition, expectedDefinition) {
+					t.Errorf("DuplicateVerificationScenario() = %#v, want copied definition", got)
+				}
+				if got.WorkspaceName != nil {
+					t.Errorf("WorkspaceName = %v, want nil", got.WorkspaceName)
+				}
+				if !reflect.DeepEqual(repository.created, got) {
+					t.Errorf("CreateVerificationScenario() scenario = %#v, want %#v", repository.created, got)
+				}
+				if repository.profileID != profile.ID {
+					t.Errorf("CreateVerificationScenario() profile ID = %q, want %q", repository.profileID, profile.ID)
+				}
+			}
+			if repository.createCalls != tt.wantCreateCalls {
+				t.Errorf("CreateVerificationScenario() calls = %d, want %d", repository.createCalls, tt.wantCreateCalls)
 			}
 		})
 	}
