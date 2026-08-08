@@ -50,6 +50,10 @@ export function ListTableRows(arg1) {
   return window['go']['wails']['AppHandler']['ListTableRows'](arg1);
 }
 
+export function ListVerificationScenarios() {
+  return window['go']['wails']['AppHandler']['ListVerificationScenarios']();
+}
+
 export function LoadFlowState() {
   return window['go']['wails']['AppHandler']['LoadFlowState']();
 }
