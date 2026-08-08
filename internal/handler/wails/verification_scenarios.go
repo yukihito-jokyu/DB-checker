@@ -42,6 +42,38 @@ func (h *AppHandler) CreateVerificationScenario(request CreateVerificationScenar
 	return OK(verificationScenarioResponse(scenario))
 }
 
+// 検証シナリオ更新
+func (h *AppHandler) UpdateVerificationScenario(request UpdateVerificationScenarioRequest) Response[VerificationScenarioResponse] {
+	h.logger.Info(context.Background(), "verification scenario update requested", slog.String("operation", "verification_scenario_update"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification scenario update failed", "verification_scenario_update", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	draft, err := domain.NewVerificationScenarioDraft(request.Name, request.PrimaryTable, request.Definition)
+	if err != nil {
+		if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+			err = apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+		} else {
+			err = apperr.Wrap(apperr.CodeValidationFailed, err)
+		}
+		h.logFailureWithCode("verification scenario update failed", "verification_scenario_update", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	scenario, err := h.verificationScenarios.UpdateVerificationScenario(context.Background(), request.ScenarioID, draft)
+	if err != nil {
+		h.logFailureWithCode("verification scenario update failed", "verification_scenario_update", err)
+
+		return Fail[VerificationScenarioResponse](err)
+	}
+
+	return OK(verificationScenarioResponse(scenario))
+}
+
 // 検証シナリオ一覧取得
 func (h *AppHandler) ListVerificationScenarios() Response[[]VerificationScenarioSummaryResponse] {
 	h.logger.Info(context.Background(), "verification scenarios requested", slog.String("operation", "verification_scenarios_list"))
