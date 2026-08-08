@@ -87,6 +87,254 @@ func TestNewVerificationScenarioDraft(t *testing.T) {
 	}
 }
 
+// 検証実行プレビュー生成検証
+// テーブル化しない理由: 親の自動追加から投入・削除順まで、一続きのプレビュー内容を比較するため。
+func TestPreviewVerificationRun(t *testing.T) {
+	draft, err := NewVerificationScenarioDraft("検証", "orders", scenarioDefinitionWithChildTables([]string{"items"}))
+	if err != nil {
+		t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+	}
+	schema := Schema{
+		Tables: []Table{
+			{
+				Namespace: "app",
+				Name:      "customers",
+				Columns: []Column{
+					{
+						Name:         "id",
+						DataType:     "bigint",
+						IsPrimaryKey: true,
+					},
+				},
+			},
+			{
+				Namespace: "app",
+				Name:      "orders",
+				Columns: []Column{
+					{
+						Name:         "id",
+						DataType:     "bigint",
+						IsPrimaryKey: true,
+					},
+				},
+			},
+			{
+				Namespace: "app",
+				Name:      "items",
+				Columns: []Column{
+					{
+						Name:         "id",
+						DataType:     "bigint",
+						IsPrimaryKey: true,
+					},
+				},
+			},
+		},
+		ForeignKeys: []ForeignKey{
+			{
+				Name:        "orders_customer",
+				FromTable:   "orders",
+				FromColumns: []string{"customer_id"},
+				ToTable:     "customers",
+				ToColumns:   []string{"id"},
+			},
+			{
+				Name:        "items_order",
+				FromTable:   "items",
+				FromColumns: []string{"order_id"},
+				ToTable:     "orders",
+				ToColumns:   []string{"id"},
+			},
+		},
+	}
+
+	got := PreviewVerificationRun(draft, schema)
+	if !got.Ready {
+		t.Fatalf("Ready = false, want true; Warnings = %#v", got.Warnings)
+	}
+	if !reflect.DeepEqual(got.InsertOrder, []VerificationRunPreviewTable{
+		{
+			Name:               "customers",
+			RowCount:           1,
+			AutomaticallyAdded: true,
+			GeneratedColumns:   nil,
+		},
+		{
+			Name:               "orders",
+			RowCount:           1,
+			AutomaticallyAdded: false,
+			GeneratedColumns:   []string{"id"},
+		},
+		{
+			Name:               "items",
+			RowCount:           1,
+			AutomaticallyAdded: false,
+			GeneratedColumns:   []string{},
+		},
+	}) {
+		t.Errorf("InsertOrder = %#v, want parent-to-child order", got.InsertOrder)
+	}
+	if !reflect.DeepEqual(got.DeleteOrder, []VerificationRunPreviewTable{
+		{
+			Name:               "items",
+			RowCount:           1,
+			AutomaticallyAdded: false,
+			GeneratedColumns:   []string{},
+		},
+		{
+			Name:               "orders",
+			RowCount:           1,
+			AutomaticallyAdded: false,
+			GeneratedColumns:   []string{"id"},
+		},
+		{
+			Name:               "customers",
+			RowCount:           1,
+			AutomaticallyAdded: true,
+			GeneratedColumns:   nil,
+		},
+	}) {
+		t.Errorf("DeleteOrder = %#v, want child-to-parent order", got.DeleteOrder)
+	}
+}
+
+// 検証不能プレビュー生成検証
+// テーブル化しない理由: 主キー不足による警告内容を、単一のスキーマで明確に比較するため。
+func TestPreviewVerificationRunNotReady(t *testing.T) {
+	draft, err := NewVerificationScenarioDraft("検証", "orders", validVerificationScenarioDefinition())
+	if err != nil {
+		t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+	}
+
+	got := PreviewVerificationRun(draft, Schema{Tables: []Table{
+		{
+			Namespace: "app",
+			Name:      "orders",
+			Columns: []Column{
+				{
+					Name:     "value",
+					DataType: "text",
+				},
+			},
+		},
+	}})
+	if got.Ready {
+		t.Error("Ready = true, want false")
+	}
+	if !reflect.DeepEqual(got.Warnings, []string{"主キーがありません: orders"}) {
+		t.Errorf("Warnings = %#v, want primary key warning", got.Warnings)
+	}
+}
+
+// 循環参照プレビュー検証
+// テーブル化しない理由: 循環参照の警告と空の順序を、単一のスキーマで明確に比較するため。
+func TestPreviewVerificationRunCyclicForeignKeys(t *testing.T) {
+	draft, err := NewVerificationScenarioDraft("検証", "orders", validVerificationScenarioDefinition())
+	if err != nil {
+		t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+	}
+	schema := Schema{
+		Tables: []Table{
+			{
+				Namespace: "app",
+				Name:      "orders",
+				Columns: []Column{
+					{
+						Name:         "id",
+						DataType:     "bigint",
+						IsPrimaryKey: true,
+					},
+				},
+			},
+			{
+				Namespace: "app",
+				Name:      "customers",
+				Columns: []Column{
+					{
+						Name:         "id",
+						DataType:     "bigint",
+						IsPrimaryKey: true,
+					},
+				},
+			},
+		},
+		ForeignKeys: []ForeignKey{
+			{
+				Name:        "orders_customer",
+				FromTable:   "orders",
+				FromColumns: []string{"customer_id"},
+				ToTable:     "customers",
+				ToColumns:   []string{"id"},
+			},
+			{
+				Name:        "customers_order",
+				FromTable:   "customers",
+				FromColumns: []string{"order_id"},
+				ToTable:     "orders",
+				ToColumns:   []string{"id"},
+			},
+		},
+	}
+
+	got := PreviewVerificationRun(draft, schema)
+	if got.Ready {
+		t.Error("Ready = true, want false")
+	}
+	if !reflect.DeepEqual(got.Warnings, []string{"外部キーの循環参照があるため投入順を確定できません"}) {
+		t.Errorf("Warnings = %#v, want cycle warning", got.Warnings)
+	}
+}
+
+// 対象テーブル未発見プレビュー検証
+// テーブル化しない理由: 複数の未発見対象を入力順に警告する内容を、単一のスキーマで明確に比較するため。
+func TestPreviewVerificationRunMissingTables(t *testing.T) {
+	tests := []struct {
+		name         string
+		primaryTable string
+		childTables  []string
+		wantWarnings []string
+	}{
+		{
+			name:         "子対象が存在しない",
+			primaryTable: "orders",
+			childTables:  []string{"missing_items"},
+			wantWarnings: []string{
+				"対象テーブルが見つかりません: missing_items",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			definition := scenarioDefinitionWithChildTables(tt.childTables)
+			draft, err := NewVerificationScenarioDraft("検証", tt.primaryTable, definition)
+			if err != nil {
+				t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+			}
+
+			got := PreviewVerificationRun(draft, Schema{Tables: []Table{
+				{
+					Namespace: "app",
+					Name:      "orders",
+					Columns: []Column{
+						{
+							Name:         "id",
+							DataType:     "bigint",
+							IsPrimaryKey: true,
+						},
+					},
+				},
+			}})
+			if got.Ready {
+				t.Error("Ready = true, want false")
+			}
+			if !reflect.DeepEqual(got.Warnings, tt.wantWarnings) {
+				t.Errorf("Warnings = %#v, want %#v", got.Warnings, tt.wantWarnings)
+			}
+		})
+	}
+}
+
 // 検証シナリオ下書き全項目検証
 func TestNewVerificationScenarioDraftValidation(t *testing.T) {
 	tests := []struct {
@@ -776,6 +1024,72 @@ func TestNewVerificationScenario(t *testing.T) {
 			}
 			if !got.UpdatedAt.Equal(updatedAt) {
 				t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, updatedAt)
+			}
+		})
+	}
+}
+
+// プレビュー補助関数検証
+func TestVerificationRunPreviewHelpers(t *testing.T) {
+	tests := []struct {
+		name                  string
+		definition            map[string]any
+		parent                string
+		requestedTables       []string
+		rowCounts             map[string]int
+		foreignKeys           []ForeignKey
+		wantGeneratedColumns  map[string][]string
+		wantDependentRowCount int
+	}{
+		{
+			name: "生成規則を列名順に返し依存する子の最大行数を使う",
+			definition: map[string]any{
+				"columnGenerators": map[string]any{
+					"orders": map[string]any{
+						"z": map[string]any{},
+						"a": map[string]any{},
+					},
+					"invalid": "not-an-object",
+				},
+			},
+			parent: "orders",
+			requestedTables: []string{
+				"orders",
+				"items",
+			},
+			rowCounts: map[string]int{
+				"items": 3,
+			},
+			foreignKeys: []ForeignKey{{
+				FromTable: "items",
+				ToTable:   "orders",
+			}},
+			wantGeneratedColumns: map[string][]string{
+				"orders": {
+					"a",
+					"z",
+				},
+			},
+			wantDependentRowCount: 3,
+		},
+		{
+			name:                  "規則なしと依存なしでは空集合と既定行数を返す",
+			definition:            map[string]any{"columnGenerators": "not-an-object"},
+			parent:                "orders",
+			requestedTables:       []string{"orders"},
+			rowCounts:             map[string]int{"orders": 9},
+			wantGeneratedColumns:  map[string][]string{},
+			wantDependentRowCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := scenarioGeneratedColumns(tt.definition); !reflect.DeepEqual(got, tt.wantGeneratedColumns) {
+				t.Errorf("scenarioGeneratedColumns() = %#v, want %#v", got, tt.wantGeneratedColumns)
+			}
+			if got := dependentRowCount(tt.parent, tt.requestedTables, tt.rowCounts, tt.foreignKeys); got != tt.wantDependentRowCount {
+				t.Errorf("dependentRowCount() = %d, want %d", got, tt.wantDependentRowCount)
 			}
 		})
 	}

@@ -94,6 +94,48 @@ func (h *AppHandler) DeleteVerificationScenario(request DeleteVerificationScenar
 	return OK(DeleteScenarioResponse{ScenarioID: request.ScenarioID, WorkspaceRemoved: workspaceRemoved})
 }
 
+// 検証実行プレビュー取得
+func (h *AppHandler) PreviewVerificationRun(request PreviewVerificationRunRequest) Response[VerificationRunPreviewResponse] {
+	h.logger.Info(context.Background(), "verification run preview requested", slog.String("operation", "verification_run_preview"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification run preview failed", "verification_run_preview", err)
+
+		return Fail[VerificationRunPreviewResponse](err)
+	}
+	if (request.ScenarioID == "") == (request.Draft == nil) {
+		err := apperr.New(apperr.CodeValidationFailed)
+		h.logFailureWithCode("verification run preview failed", "verification_run_preview", err)
+
+		return Fail[VerificationRunPreviewResponse](err)
+	}
+
+	var draft *domain.VerificationScenarioDraft
+	if request.Draft != nil {
+		value, err := domain.NewVerificationScenarioDraft(request.Draft.Name, request.Draft.PrimaryTable, request.Draft.Definition)
+		if err != nil {
+			if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+				err = apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+			} else {
+				err = apperr.Wrap(apperr.CodeValidationFailed, err)
+			}
+			h.logFailureWithCode("verification run preview failed", "verification_run_preview", err)
+
+			return Fail[VerificationRunPreviewResponse](err)
+		}
+		draft = &value
+	}
+
+	preview, err := h.verificationScenarios.PreviewVerificationRun(context.Background(), request.ScenarioID, draft)
+	if err != nil {
+		h.logFailureWithCode("verification run preview failed", "verification_run_preview", err)
+
+		return Fail[VerificationRunPreviewResponse](err)
+	}
+
+	return OK(verificationRunPreviewResponse(preview))
+}
+
 // 検証ワークスペース開始
 func (h *AppHandler) EnterVerificationWorkspace(scenarioID string) Response[VerificationWorkspaceResponse] {
 	h.logger.Info(context.Background(), "verification workspace enter requested", slog.String("operation", "verification_workspace_enter"))
@@ -249,4 +291,29 @@ func verificationScenarioResponse(scenario domain.VerificationScenario) Verifica
 		UpdatedAt:     scenario.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		LatestRun:     nil,
 	}
+}
+
+// 検証実行プレビュー応答変換
+func verificationRunPreviewResponse(preview domain.VerificationRunPreview) VerificationRunPreviewResponse {
+	return VerificationRunPreviewResponse{
+		Ready:       preview.Ready,
+		InsertOrder: verificationRunPreviewTablesResponse(preview.InsertOrder),
+		DeleteOrder: verificationRunPreviewTablesResponse(preview.DeleteOrder),
+		Warnings:    preview.Warnings,
+	}
+}
+
+// 検証実行プレビューテーブル応答変換
+func verificationRunPreviewTablesResponse(tables []domain.VerificationRunPreviewTable) []VerificationRunPreviewTableResponse {
+	responses := make([]VerificationRunPreviewTableResponse, 0, len(tables))
+	for _, table := range tables {
+		responses = append(responses, VerificationRunPreviewTableResponse{
+			Name:               table.Name,
+			RowCount:           table.RowCount,
+			AutomaticallyAdded: table.AutomaticallyAdded,
+			GeneratedColumns:   append([]string{}, table.GeneratedColumns...),
+		})
+	}
+
+	return responses
 }

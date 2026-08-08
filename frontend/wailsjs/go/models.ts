@@ -653,6 +653,54 @@ export namespace wails {
 	        this.runId = source["runId"];
 	    }
 	}
+	export class VerificationScenarioDraftRequest {
+	    name: string;
+	    primaryTable: string;
+	    definition: Record<string, any>;
+
+	    static createFrom(source: any = {}) {
+	        return new VerificationScenarioDraftRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.primaryTable = source["primaryTable"];
+	        this.definition = source["definition"];
+	    }
+	}
+	export class PreviewVerificationRunRequest {
+	    scenarioId: string;
+	    draft?: VerificationScenarioDraftRequest;
+
+	    static createFrom(source: any = {}) {
+	        return new PreviewVerificationRunRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scenarioId = source["scenarioId"];
+	        this.draft = this.convertValues(source["draft"], VerificationScenarioDraftRequest);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ProfileCheckResponse {
 	    valid: boolean;
 	    profileCount: number;
@@ -1324,6 +1372,92 @@ export namespace wails {
 		    return a;
 		}
 	}
+	export class VerificationRunPreviewTableResponse {
+	    name: string;
+	    rowCount: number;
+	    automaticallyAdded: boolean;
+	    generatedColumns: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new VerificationRunPreviewTableResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.rowCount = source["rowCount"];
+	        this.automaticallyAdded = source["automaticallyAdded"];
+	        this.generatedColumns = source["generatedColumns"];
+	    }
+	}
+	export class VerificationRunPreviewResponse {
+	    ready: boolean;
+	    insertOrder: VerificationRunPreviewTableResponse[];
+	    deleteOrder: VerificationRunPreviewTableResponse[];
+	    warnings: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new VerificationRunPreviewResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ready = source["ready"];
+	        this.insertOrder = this.convertValues(source["insertOrder"], VerificationRunPreviewTableResponse);
+	        this.deleteOrder = this.convertValues(source["deleteOrder"], VerificationRunPreviewTableResponse);
+	        this.warnings = source["warnings"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationRunPreviewResponse_ {
+	    data?: VerificationRunPreviewResponse;
+	    error?: ErrorResponse;
+
+	    static createFrom(source: any = {}) {
+	        return new Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_VerificationRunPreviewResponse_(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.data = this.convertValues(source["data"], VerificationRunPreviewResponse);
+	        this.error = this.convertValues(source["error"], ErrorResponse);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class VerificationScenarioResponse {
 	    id: string;
 	    name: string;
@@ -1622,6 +1756,9 @@ export namespace wails {
 	        this.definition = source["definition"];
 	    }
 	}
+
+
+
 
 
 

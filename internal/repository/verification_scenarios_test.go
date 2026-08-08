@@ -947,6 +947,573 @@ func TestSQLiteVerificationScenarioRepositoryDeleteVerificationScenarioKeepsStat
 	}
 }
 
+// SQLite検証状態永続化検証
+func TestSQLiteVerificationScenarioRepositoryVerificationStatePersistence(t *testing.T) {
+	tests := []struct {
+		name             string
+		workspaceState   string
+		runState         string
+		deleteWorkspace  bool
+		updateProfileID  string
+		wantFound        bool
+		wantUpdated      bool
+		wantScenarioBusy bool
+		wantRunBusy      bool
+	}{
+		{
+			name:             "ワークスペースを更新して使用中と判定する",
+			workspaceState:   "creating",
+			runState:         "running",
+			updateProfileID:  "profile-1",
+			wantFound:        true,
+			wantUpdated:      true,
+			wantScenarioBusy: true,
+			wantRunBusy:      true,
+		},
+		{
+			name:             "ワークスペースを削除して実行状態を更新しない",
+			workspaceState:   "inactive",
+			deleteWorkspace:  true,
+			updateProfileID:  "profile-2",
+			wantScenarioBusy: true,
+			wantRunBusy:      true,
+		},
+		{
+			name:             "停止済み状態を使用中と判定しない",
+			workspaceState:   "inactive",
+			runState:         "completed",
+			updateProfileID:  "profile-1",
+			wantFound:        true,
+			wantUpdated:      true,
+			wantScenarioBusy: false,
+			wantRunBusy:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := newInitializedVerificationScenarioRepository(t)
+			if err := repository.SaveVerificationWorkspace(context.Background(), "profile-1", "scenario-1", "verification_orders", "creating"); err != nil {
+				t.Fatalf("SaveVerificationWorkspace() initial error = %v", err)
+			}
+			if err := repository.SaveVerificationWorkspace(context.Background(), "profile-1", "scenario-1", "verification_orders_v2", tt.workspaceState); err != nil {
+				t.Fatalf("SaveVerificationWorkspace() error = %v", err)
+			}
+			if tt.deleteWorkspace {
+				if err := repository.DeleteVerificationWorkspace(context.Background(), "profile-1", "scenario-1"); err != nil {
+					t.Fatalf("DeleteVerificationWorkspace() error = %v", err)
+				}
+			}
+			if err := repository.CreateVerificationRun(context.Background(), "profile-1", "scenario-1", "run-1"); err != nil {
+				t.Fatalf("CreateVerificationRun() error = %v", err)
+			}
+
+			gotUpdated, err := repository.UpdateVerificationRunState(context.Background(), tt.updateProfileID, "run-1", tt.runState)
+			if err != nil {
+				t.Fatalf("UpdateVerificationRunState() error = %v", err)
+			}
+			if gotUpdated != tt.wantUpdated {
+				t.Errorf("UpdateVerificationRunState() updated = %v, want %v", gotUpdated, tt.wantUpdated)
+			}
+
+			gotWorkspaceState, gotWorkspaceName, gotWorkspaceFound, err := repository.GetVerificationWorkspace(context.Background(), "profile-1", "scenario-1")
+			if err != nil {
+				t.Fatalf("GetVerificationWorkspace() error = %v", err)
+			}
+			if gotWorkspaceFound != !tt.deleteWorkspace {
+				t.Errorf("GetVerificationWorkspace() found = %v, want %v", gotWorkspaceFound, !tt.deleteWorkspace)
+			}
+			if gotWorkspaceFound {
+				if gotWorkspaceState != tt.workspaceState {
+					t.Errorf("GetVerificationWorkspace() state = %q, want %q", gotWorkspaceState, tt.workspaceState)
+				}
+				if gotWorkspaceName != "verification_orders_v2" {
+					t.Errorf("GetVerificationWorkspace() name = %q, want %q", gotWorkspaceName, "verification_orders_v2")
+				}
+			}
+
+			gotScenarioID, gotRunState, gotRunFound, err := repository.GetVerificationRun(context.Background(), tt.updateProfileID, "run-1")
+			if err != nil {
+				t.Fatalf("GetVerificationRun() error = %v", err)
+			}
+			if gotRunFound != tt.wantFound {
+				t.Fatalf("GetVerificationRun() found = %v, want %v", gotRunFound, tt.wantFound)
+			}
+			if gotRunFound {
+				if gotScenarioID != "scenario-1" {
+					t.Errorf("GetVerificationRun() scenario ID = %q, want %q", gotScenarioID, "scenario-1")
+				}
+				wantRunState := "prepared"
+				if tt.wantUpdated {
+					wantRunState = tt.runState
+				}
+				if gotRunState != wantRunState {
+					t.Errorf("GetVerificationRun() state = %q, want %q", gotRunState, wantRunState)
+				}
+			}
+
+			gotScenarioBusy, err := repository.IsVerificationScenarioBusy(context.Background(), "profile-1", "scenario-1")
+			if err != nil {
+				t.Fatalf("IsVerificationScenarioBusy() error = %v", err)
+			}
+			if gotScenarioBusy != tt.wantScenarioBusy {
+				t.Errorf("IsVerificationScenarioBusy() = %v, want %v", gotScenarioBusy, tt.wantScenarioBusy)
+			}
+			gotRunBusy, err := repository.IsVerificationRunBusy(context.Background(), "profile-1", "scenario-1")
+			if err != nil {
+				t.Fatalf("IsVerificationRunBusy() error = %v", err)
+			}
+			if gotRunBusy != tt.wantRunBusy {
+				t.Errorf("IsVerificationRunBusy() = %v, want %v", gotRunBusy, tt.wantRunBusy)
+			}
+		})
+	}
+}
+
+// SQLite検証状態使用中分類検証
+func TestSQLiteVerificationScenarioRepositoryVerificationStateBusyClassification(t *testing.T) {
+	tests := []struct {
+		name             string
+		workspaceState   string
+		runState         string
+		wantScenarioBusy bool
+		wantRunBusy      bool
+	}{
+		{
+			name:             "activeワークスペースのみをシナリオ使用中と判定する",
+			workspaceState:   "active",
+			wantScenarioBusy: true,
+		},
+		{
+			name:             "testワークスペースのみをシナリオ使用中と判定する",
+			workspaceState:   "test",
+			wantScenarioBusy: true,
+		},
+		{
+			name:             "deletingワークスペースのみをシナリオ使用中と判定する",
+			workspaceState:   "deleting",
+			wantScenarioBusy: true,
+		},
+		{
+			name:             "prepared実行のみを使用中と判定する",
+			runState:         "prepared",
+			wantScenarioBusy: true,
+			wantRunBusy:      true,
+		},
+		{
+			name:             "canceling実行のみを使用中と判定する",
+			runState:         "canceling",
+			wantScenarioBusy: true,
+			wantRunBusy:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := newInitializedVerificationScenarioRepository(t)
+			if tt.workspaceState != "" {
+				if err := repository.SaveVerificationWorkspace(context.Background(), "profile-1", "scenario-1", "verification_orders", tt.workspaceState); err != nil {
+					t.Fatalf("SaveVerificationWorkspace() error = %v", err)
+				}
+			}
+			if tt.runState != "" {
+				if err := repository.CreateVerificationRun(context.Background(), "profile-1", "scenario-1", "run-1"); err != nil {
+					t.Fatalf("CreateVerificationRun() error = %v", err)
+				}
+				if tt.runState != "prepared" {
+					updated, err := repository.UpdateVerificationRunState(context.Background(), "profile-1", "run-1", tt.runState)
+					if err != nil {
+						t.Fatalf("UpdateVerificationRunState() error = %v", err)
+					}
+					if !updated {
+						t.Fatal("UpdateVerificationRunState() updated = false, want true")
+					}
+				}
+			}
+
+			gotScenarioBusy, err := repository.IsVerificationScenarioBusy(context.Background(), "profile-1", "scenario-1")
+			if err != nil {
+				t.Fatalf("IsVerificationScenarioBusy() error = %v", err)
+			}
+			if gotScenarioBusy != tt.wantScenarioBusy {
+				t.Errorf("IsVerificationScenarioBusy() = %v, want %v", gotScenarioBusy, tt.wantScenarioBusy)
+			}
+			gotRunBusy, err := repository.IsVerificationRunBusy(context.Background(), "profile-1", "scenario-1")
+			if err != nil {
+				t.Fatalf("IsVerificationRunBusy() error = %v", err)
+			}
+			if gotRunBusy != tt.wantRunBusy {
+				t.Errorf("IsVerificationRunBusy() = %v, want %v", gotRunBusy, tt.wantRunBusy)
+			}
+		})
+	}
+}
+
+// SQLite検証状態プロファイル分離検証
+func TestSQLiteVerificationScenarioRepositoryVerificationStateProfileIsolation(t *testing.T) {
+	tests := []struct {
+		name                       string
+		profileID                  string
+		otherProfileID             string
+		scenarioID                 string
+		runID                      string
+		otherRunID                 string
+		profileWorkspaceName       string
+		profileWorkspaceState      string
+		otherWorkspaceName         string
+		otherWorkspaceState        string
+		updatedRunState            string
+		wantProfileWorkspaceFound  bool
+		wantOtherWorkspaceFound    bool
+		wantDeletedWorkspaceFound  bool
+		wantProfileRunFound        bool
+		wantOtherProfileRunFound   bool
+		wantProfileScenarioID      string
+		wantProfileRunState        string
+		wantOtherProfileScenarioID string
+		wantOtherProfileRunState   string
+		wantProfileScenarioBusy    bool
+		wantProfileRunBusy         bool
+	}{
+		{
+			name:                       "同一シナリオIDの別プロファイル状態から分離する",
+			profileID:                  "profile-1",
+			otherProfileID:             "profile-2",
+			scenarioID:                 "scenario-1",
+			runID:                      "run-1",
+			otherRunID:                 "run-2",
+			profileWorkspaceName:       "verification_profile_1",
+			profileWorkspaceState:      "inactive",
+			otherWorkspaceName:         "verification_profile_2",
+			otherWorkspaceState:        "active",
+			updatedRunState:            "completed",
+			wantProfileWorkspaceFound:  true,
+			wantOtherWorkspaceFound:    true,
+			wantDeletedWorkspaceFound:  false,
+			wantProfileRunFound:        true,
+			wantOtherProfileRunFound:   false,
+			wantProfileScenarioID:      "scenario-1",
+			wantProfileRunState:        "completed",
+			wantOtherProfileScenarioID: "",
+			wantOtherProfileRunState:   "",
+			wantProfileScenarioBusy:    false,
+			wantProfileRunBusy:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := newInitializedVerificationScenarioRepository(t)
+			if err := repository.SaveVerificationWorkspace(context.Background(), tt.profileID, tt.scenarioID, tt.profileWorkspaceName, tt.profileWorkspaceState); err != nil {
+				t.Fatalf("SaveVerificationWorkspace() profile-1 error = %v", err)
+			}
+			if err := repository.SaveVerificationWorkspace(context.Background(), tt.otherProfileID, tt.scenarioID, tt.otherWorkspaceName, tt.otherWorkspaceState); err != nil {
+				t.Fatalf("SaveVerificationWorkspace() profile-2 error = %v", err)
+			}
+			if err := repository.CreateVerificationRun(context.Background(), tt.profileID, tt.scenarioID, tt.runID); err != nil {
+				t.Fatalf("CreateVerificationRun() profile-1 error = %v", err)
+			}
+			updated, err := repository.UpdateVerificationRunState(context.Background(), tt.profileID, tt.runID, tt.updatedRunState)
+			if err != nil {
+				t.Fatalf("UpdateVerificationRunState() profile-1 error = %v", err)
+			}
+			if !updated {
+				t.Fatal("UpdateVerificationRunState() updated = false, want true")
+			}
+			if err := repository.CreateVerificationRun(context.Background(), tt.otherProfileID, tt.scenarioID, tt.otherRunID); err != nil {
+				t.Fatalf("CreateVerificationRun() profile-2 error = %v", err)
+			}
+
+			gotWorkspaceState, gotWorkspaceName, gotWorkspaceFound, err := repository.GetVerificationWorkspace(context.Background(), tt.profileID, tt.scenarioID)
+			if err != nil {
+				t.Fatalf("GetVerificationWorkspace() profile-1 error = %v", err)
+			}
+			if gotWorkspaceFound != tt.wantProfileWorkspaceFound {
+				t.Fatalf("GetVerificationWorkspace() profile-1 found = %v, want %v", gotWorkspaceFound, tt.wantProfileWorkspaceFound)
+			}
+			if gotWorkspaceState != tt.profileWorkspaceState {
+				t.Errorf("GetVerificationWorkspace() profile-1 state = %q, want %q", gotWorkspaceState, tt.profileWorkspaceState)
+			}
+			if gotWorkspaceName != tt.profileWorkspaceName {
+				t.Errorf("GetVerificationWorkspace() profile-1 name = %q, want %q", gotWorkspaceName, tt.profileWorkspaceName)
+			}
+			if err := repository.DeleteVerificationWorkspace(context.Background(), tt.profileID, tt.scenarioID); err != nil {
+				t.Fatalf("DeleteVerificationWorkspace() profile-1 error = %v", err)
+			}
+
+			_, _, gotProfile1WorkspaceFound, err := repository.GetVerificationWorkspace(context.Background(), tt.profileID, tt.scenarioID)
+			if err != nil {
+				t.Fatalf("GetVerificationWorkspace() deleted profile-1 error = %v", err)
+			}
+			if gotProfile1WorkspaceFound != tt.wantDeletedWorkspaceFound {
+				t.Errorf("GetVerificationWorkspace() deleted profile-1 found = %v, want %v", gotProfile1WorkspaceFound, tt.wantDeletedWorkspaceFound)
+			}
+			gotProfile2WorkspaceState, gotProfile2WorkspaceName, gotProfile2WorkspaceFound, err := repository.GetVerificationWorkspace(context.Background(), tt.otherProfileID, tt.scenarioID)
+			if err != nil {
+				t.Fatalf("GetVerificationWorkspace() profile-2 error = %v", err)
+			}
+			if gotProfile2WorkspaceFound != tt.wantOtherWorkspaceFound {
+				t.Fatalf("GetVerificationWorkspace() profile-2 found = %v, want %v", gotProfile2WorkspaceFound, tt.wantOtherWorkspaceFound)
+			}
+			if gotProfile2WorkspaceState != tt.otherWorkspaceState {
+				t.Errorf("GetVerificationWorkspace() profile-2 state = %q, want %q", gotProfile2WorkspaceState, tt.otherWorkspaceState)
+			}
+			if gotProfile2WorkspaceName != tt.otherWorkspaceName {
+				t.Errorf("GetVerificationWorkspace() profile-2 name = %q, want %q", gotProfile2WorkspaceName, tt.otherWorkspaceName)
+			}
+
+			gotScenarioID, gotRunState, gotRunFound, err := repository.GetVerificationRun(context.Background(), tt.profileID, tt.runID)
+			if err != nil {
+				t.Fatalf("GetVerificationRun() profile-1 error = %v", err)
+			}
+			if gotRunFound != tt.wantProfileRunFound {
+				t.Fatalf("GetVerificationRun() profile-1 found = %v, want %v", gotRunFound, tt.wantProfileRunFound)
+			}
+			if gotScenarioID != tt.wantProfileScenarioID {
+				t.Errorf("GetVerificationRun() profile-1 scenario ID = %q, want %q", gotScenarioID, tt.wantProfileScenarioID)
+			}
+			if gotRunState != tt.wantProfileRunState {
+				t.Errorf("GetVerificationRun() profile-1 state = %q, want %q", gotRunState, tt.wantProfileRunState)
+			}
+
+			gotOtherScenarioID, gotOtherRunState, gotOtherRunFound, err := repository.GetVerificationRun(context.Background(), tt.otherProfileID, tt.runID)
+			if err != nil {
+				t.Fatalf("GetVerificationRun() other profile error = %v", err)
+			}
+			if gotOtherRunFound != tt.wantOtherProfileRunFound {
+				t.Fatalf("GetVerificationRun() other profile found = %v, want %v", gotOtherRunFound, tt.wantOtherProfileRunFound)
+			}
+			if gotOtherScenarioID != tt.wantOtherProfileScenarioID {
+				t.Errorf("GetVerificationRun() other profile scenario ID = %q, want %q", gotOtherScenarioID, tt.wantOtherProfileScenarioID)
+			}
+			if gotOtherRunState != tt.wantOtherProfileRunState {
+				t.Errorf("GetVerificationRun() other profile state = %q, want %q", gotOtherRunState, tt.wantOtherProfileRunState)
+			}
+
+			gotScenarioBusy, err := repository.IsVerificationScenarioBusy(context.Background(), tt.profileID, tt.scenarioID)
+			if err != nil {
+				t.Fatalf("IsVerificationScenarioBusy() profile-1 error = %v", err)
+			}
+			if gotScenarioBusy != tt.wantProfileScenarioBusy {
+				t.Errorf("IsVerificationScenarioBusy() profile-1 = %v, want %v", gotScenarioBusy, tt.wantProfileScenarioBusy)
+			}
+			gotRunBusy, err := repository.IsVerificationRunBusy(context.Background(), tt.profileID, tt.scenarioID)
+			if err != nil {
+				t.Fatalf("IsVerificationRunBusy() profile-1 error = %v", err)
+			}
+			if gotRunBusy != tt.wantProfileRunBusy {
+				t.Errorf("IsVerificationRunBusy() profile-1 = %v, want %v", gotRunBusy, tt.wantProfileRunBusy)
+			}
+		})
+	}
+}
+
+// SQLite検証状態永続化オープン障害検証
+func TestSQLiteVerificationScenarioRepositoryVerificationStateOpenFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*SQLiteVerificationScenarioRepository) error
+	}{
+		{
+			name: "ワークスペース取得",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, _, _, err := repository.GetVerificationWorkspace(context.Background(), "profile-1", "scenario-1")
+
+				return err
+			},
+		},
+		{
+			name: "ワークスペース保存",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				return repository.SaveVerificationWorkspace(context.Background(), "profile-1", "scenario-1", "verification_orders", "active")
+			},
+		},
+		{
+			name: "ワークスペース削除",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				return repository.DeleteVerificationWorkspace(context.Background(), "profile-1", "scenario-1")
+			},
+		},
+		{
+			name: "実行状態作成",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				return repository.CreateVerificationRun(context.Background(), "profile-1", "scenario-1", "run-1")
+			},
+		},
+		{
+			name: "実行状態取得",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, _, _, err := repository.GetVerificationRun(context.Background(), "profile-1", "run-1")
+
+				return err
+			},
+		},
+		{
+			name: "実行状態更新",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.UpdateVerificationRunState(context.Background(), "profile-1", "run-1", "running")
+
+				return err
+			},
+		},
+		{
+			name: "シナリオ使用中判定",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.IsVerificationScenarioBusy(context.Background(), "profile-1", "scenario-1")
+
+				return err
+			},
+		},
+		{
+			name: "実行使用中判定",
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.IsVerificationRunBusy(context.Background(), "profile-1", "scenario-1")
+
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVerificationScenarioOpener(t, func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			})
+
+			err := tt.call(NewSQLiteVerificationScenarioRepository(t.TempDir()))
+			if !containsErrorText(err, "open verification scenario database") {
+				t.Errorf("operation error = %v, want text %q", err, "open verification scenario database")
+			}
+		})
+	}
+}
+
+// SQLite検証状態永続化SQL障害検証
+func TestSQLiteVerificationScenarioRepositoryVerificationStateSQLFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		script verificationScenarioDatabaseScript
+		call   func(*SQLiteVerificationScenarioRepository) error
+		want   string
+	}{
+		{
+			name: "ワークスペース取得のクエリ失敗",
+			script: verificationScenarioDatabaseScript{
+				query: verificationScenarioQueryFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, _, _, err := repository.GetVerificationWorkspace(context.Background(), "profile-1", "scenario-1")
+
+				return err
+			},
+			want: "query verification workspace",
+		},
+		{
+			name: "ワークスペース保存の実行失敗",
+			script: verificationScenarioDatabaseScript{
+				exec: verificationScenarioExecFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				return repository.SaveVerificationWorkspace(context.Background(), "profile-1", "scenario-1", "verification_orders", "active")
+			},
+			want: "save verification workspace",
+		},
+		{
+			name: "ワークスペース削除の実行失敗",
+			script: verificationScenarioDatabaseScript{
+				exec: verificationScenarioExecFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				return repository.DeleteVerificationWorkspace(context.Background(), "profile-1", "scenario-1")
+			},
+			want: "delete verification workspace",
+		},
+		{
+			name: "実行状態作成の実行失敗",
+			script: verificationScenarioDatabaseScript{
+				exec: verificationScenarioExecFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				return repository.CreateVerificationRun(context.Background(), "profile-1", "scenario-1", "run-1")
+			},
+			want: "insert verification run",
+		},
+		{
+			name: "実行状態取得のクエリ失敗",
+			script: verificationScenarioDatabaseScript{
+				query: verificationScenarioQueryFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, _, _, err := repository.GetVerificationRun(context.Background(), "profile-1", "run-1")
+
+				return err
+			},
+			want: "query verification run",
+		},
+		{
+			name: "実行状態更新の実行失敗",
+			script: verificationScenarioDatabaseScript{
+				exec: verificationScenarioExecFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.UpdateVerificationRunState(context.Background(), "profile-1", "run-1", "running")
+
+				return err
+			},
+			want: "update verification run",
+		},
+		{
+			name: "実行状態更新の更新件数取得失敗",
+			script: verificationScenarioDatabaseScript{
+				exec: func(string) (driver.Result, error) {
+					return verificationScenarioTestResult{rowsAffectedErr: errors.New("rows affected failed")}, nil
+				},
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.UpdateVerificationRunState(context.Background(), "profile-1", "run-1", "running")
+
+				return err
+			},
+			want: "count updated verification runs",
+		},
+		{
+			name: "シナリオ使用中判定のクエリ失敗",
+			script: verificationScenarioDatabaseScript{
+				query: verificationScenarioQueryFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.IsVerificationScenarioBusy(context.Background(), "profile-1", "scenario-1")
+
+				return err
+			},
+			want: "check verification scenario busy state",
+		},
+		{
+			name: "実行使用中判定のクエリ失敗",
+			script: verificationScenarioDatabaseScript{
+				query: verificationScenarioQueryFailure,
+			},
+			call: func(repository *SQLiteVerificationScenarioRepository) error {
+				_, err := repository.IsVerificationRunBusy(context.Background(), "profile-1", "scenario-1")
+
+				return err
+			},
+			want: "check verification run state",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVerificationScenarioOpener(t, verificationScenarioScriptOpener("verification-state-"+tt.name, tt.script))
+
+			err := tt.call(NewSQLiteVerificationScenarioRepository(t.TempDir()))
+			if !containsErrorText(err, tt.want) {
+				t.Errorf("operation error = %v, want text %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // SQLiteシナリオDBバージョン1移行検証
 func TestSQLiteVerificationScenarioRepositoryInitializeMigratesVersion1Database(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), verificationScenarioDatabaseName)
@@ -1217,6 +1784,17 @@ type verificationScenarioSeed struct {
 	updatedAt      string
 }
 
+// 初期化済みシナリオリポジトリ生成
+func newInitializedVerificationScenarioRepository(t *testing.T) *SQLiteVerificationScenarioRepository {
+	t.Helper()
+	repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+	if err := repository.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	return repository
+}
+
 // シナリオDBシード
 func seedVerificationScenario(t *testing.T, databasePath string, seed verificationScenarioSeed) {
 	t.Helper()
@@ -1313,6 +1891,16 @@ func verificationScenarioInactiveRows(query string) (driver.Rows, error) {
 	}
 
 	return verificationScenarioExistsRows(false), nil
+}
+
+// テスト用クエリ障害
+func verificationScenarioQueryFailure(string) (driver.Rows, error) {
+	return nil, errors.New("query failed")
+}
+
+// テスト用実行障害
+func verificationScenarioExecFailure(string) (driver.Result, error) {
+	return nil, errors.New("exec failed")
 }
 
 // シナリオ行生成
