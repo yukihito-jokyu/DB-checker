@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +19,10 @@ import (
 
 const verificationScenarioTestDriverName = "verification-scenario-test"
 
-var verificationScenarioTestScripts = map[string]verificationScenarioDatabaseScript{}
+var (
+	verificationScenarioTestScripts   = map[string]verificationScenarioDatabaseScript{}
+	verificationScenarioTestScriptsMu sync.Mutex
+)
 
 type verificationScenarioDatabaseScript struct {
 	query func(string) (driver.Rows, error)
@@ -36,6 +40,11 @@ type verificationScenarioTestTransaction struct {
 	commitErr error
 }
 
+type verificationScenarioTestResult struct {
+	rowsAffected    int64
+	rowsAffectedErr error
+}
+
 type verificationScenarioTestRows struct {
 	columns []string
 	values  [][]driver.Value
@@ -50,7 +59,9 @@ func init() {
 
 // テスト用SQLite接続生成
 func (verificationScenarioTestDriver) Open(name string) (driver.Conn, error) {
+	verificationScenarioTestScriptsMu.Lock()
 	script, exists := verificationScenarioTestScripts[name]
+	verificationScenarioTestScriptsMu.Unlock()
 	if !exists {
 		return nil, fmt.Errorf("test database script not found: %s", name)
 	}
@@ -103,6 +114,16 @@ func (t verificationScenarioTestTransaction) Commit() error { return t.commitErr
 
 // テスト用トランザクション取消
 func (verificationScenarioTestTransaction) Rollback() error { return nil }
+
+// テスト用更新件数取得
+func (r verificationScenarioTestResult) RowsAffected() (int64, error) {
+	return r.rowsAffected, r.rowsAffectedErr
+}
+
+// テスト用最終ID取得
+func (verificationScenarioTestResult) LastInsertId() (int64, error) {
+	return 0, nil
+}
 
 // テスト用行列名取得
 func (r *verificationScenarioTestRows) Columns() []string { return r.columns }
@@ -235,6 +256,155 @@ func TestSQLiteVerificationScenarioRepositoryCreateVerificationScenarioFailures(
 			err := repository.CreateVerificationScenario(context.Background(), "profile-1", tt.scenario)
 			if !containsErrorText(err, tt.want) {
 				t.Errorf("CreateVerificationScenario() error = %v, want text %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// SQLiteシナリオ更新検証
+func TestSQLiteVerificationScenarioRepositoryUpdateVerificationScenario(t *testing.T) {
+	workspaceName := "verification_orders"
+	createdAt := mustParseScenarioTime(t, "2026-08-08T11:00:00Z")
+	updatedAt := mustParseScenarioTime(t, "2026-08-08T12:00:00.123456789Z")
+	updatedScenario, err := domain.NewVerificationScenario("scenario-1", "更新後", "users", []byte(`{"rowCounts":{"users":20}}`), &workspaceName, createdAt, updatedAt)
+	if err != nil {
+		t.Fatalf("NewVerificationScenario() error = %v", err)
+	}
+	tests := []struct {
+		name      string
+		profileID string
+		seed      []verificationScenarioSeed
+		wantFound bool
+	}{
+		{
+			name:      "定義と更新日時だけを同一プロファイルで更新する",
+			profileID: "profile-1",
+			seed: []verificationScenarioSeed{
+				{
+					id:             "scenario-1",
+					profileID:      "profile-1",
+					name:           "更新前",
+					primaryTable:   "orders",
+					definitionJSON: `{"rowCounts":{"orders":10}}`,
+					workspaceName:  &workspaceName,
+					createdAt:      createdAt.Format(time.RFC3339Nano),
+					updatedAt:      createdAt.Format(time.RFC3339Nano),
+				},
+			},
+			wantFound: true,
+		},
+		{
+			name:      "他プロファイルのシナリオを更新しない",
+			profileID: "profile-1",
+			seed: []verificationScenarioSeed{
+				{
+					id:             "scenario-1",
+					profileID:      "profile-2",
+					name:           "更新前",
+					primaryTable:   "orders",
+					definitionJSON: `{"rowCounts":{"orders":10}}`,
+					createdAt:      createdAt.Format(time.RFC3339Nano),
+					updatedAt:      createdAt.Format(time.RFC3339Nano),
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+			if err := repository.Initialize(context.Background()); err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+			for _, seed := range tt.seed {
+				seedVerificationScenario(t, repository.databasePath, seed)
+			}
+
+			found, err := repository.UpdateVerificationScenario(context.Background(), tt.profileID, updatedScenario)
+			if err != nil {
+				t.Fatalf("UpdateVerificationScenario() error = %v", err)
+			}
+			if found != tt.wantFound {
+				t.Fatalf("UpdateVerificationScenario() found = %v, want %v", found, tt.wantFound)
+			}
+			if !tt.wantFound {
+				return
+			}
+
+			got, found, err := repository.GetVerificationScenario(context.Background(), tt.profileID, updatedScenario.ID)
+			if err != nil {
+				t.Fatalf("GetVerificationScenario() error = %v", err)
+			}
+			if !found {
+				t.Fatal("GetVerificationScenario() found = false, want true")
+			}
+			if !reflect.DeepEqual(got, updatedScenario) {
+				t.Errorf("GetVerificationScenario() = %#v, want %#v", got, updatedScenario)
+			}
+		})
+	}
+}
+
+// SQLiteシナリオ更新障害検証
+func TestSQLiteVerificationScenarioRepositoryUpdateVerificationScenarioFailures(t *testing.T) {
+	scenario, err := domain.NewVerificationScenario("scenario-1", "検証", "orders", []byte(`{}`), nil, time.Now().UTC(), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("NewVerificationScenario() error = %v", err)
+	}
+	cyclicDefinition := map[string]any{}
+	cyclicDefinition["cycle"] = cyclicDefinition
+	marshalFailureScenario := scenario
+	marshalFailureScenario.Definition = cyclicDefinition
+	tests := []struct {
+		name     string
+		open     func(string, string) (*sql.DB, error)
+		scenario domain.VerificationScenario
+		want     string
+	}{
+		{
+			name: "データベースオープン失敗",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			scenario: scenario,
+			want:     "open verification scenario database",
+		},
+		{
+			name:     "定義JSON符号化失敗",
+			open:     verificationScenarioScriptOpener("update-marshal-error", verificationScenarioDatabaseScript{}),
+			scenario: marshalFailureScenario,
+			want:     "encode verification scenario definition",
+		},
+		{
+			name: "UPDATE失敗",
+			open: verificationScenarioScriptOpener("update-exec-error", verificationScenarioDatabaseScript{
+				exec: func(string) (driver.Result, error) {
+					return nil, errors.New("update failed")
+				},
+			}),
+			scenario: scenario,
+			want:     "update verification scenario",
+		},
+		{
+			name: "更新件数取得失敗",
+			open: verificationScenarioScriptOpener("update-rows-affected-error", verificationScenarioDatabaseScript{
+				exec: func(string) (driver.Result, error) {
+					return verificationScenarioTestResult{rowsAffectedErr: errors.New("rows affected failed")}, nil
+				},
+			}),
+			scenario: scenario,
+			want:     "count updated verification scenarios",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVerificationScenarioOpener(t, tt.open)
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+
+			_, err := repository.UpdateVerificationScenario(context.Background(), "profile-1", tt.scenario)
+			if !containsErrorText(err, tt.want) {
+				t.Errorf("UpdateVerificationScenario() error = %v, want text %q", err, tt.want)
 			}
 		})
 	}
@@ -812,7 +982,9 @@ func openVerificationScenarioTestDatabase(t *testing.T, name string, script veri
 	if t != nil {
 		t.Helper()
 	}
+	verificationScenarioTestScriptsMu.Lock()
 	verificationScenarioTestScripts[name] = script
+	verificationScenarioTestScriptsMu.Unlock()
 	database, err := sql.Open(verificationScenarioTestDriverName, name)
 	if err != nil {
 		if t != nil {

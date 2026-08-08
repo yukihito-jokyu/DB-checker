@@ -135,6 +135,32 @@ func (r *SQLiteVerificationScenarioRepository) GetVerificationScenario(ctx conte
 	return scenario, true, nil
 }
 
+// 検証シナリオ更新
+func (r *SQLiteVerificationScenarioRepository) UpdateVerificationScenario(ctx context.Context, profileID string, scenario domain.VerificationScenario) (bool, error) {
+	database, err := openVerificationScenarioDatabase("sqlite", r.databasePath)
+	if err != nil {
+		return false, fmt.Errorf("open verification scenario database: %w", err)
+	}
+	defer database.Close()
+
+	definitionJSON, err := json.Marshal(scenario.Definition)
+	if err != nil {
+		return false, fmt.Errorf("encode verification scenario definition: %w", err)
+	}
+
+	result, err := database.ExecContext(ctx, `UPDATE scenarios SET name = ?, primary_table = ?, definition_json = ?, updated_at = ? WHERE profile_id = ? AND id = ?`, scenario.Name, scenario.PrimaryTable, string(definitionJSON), scenario.UpdatedAt.UTC().Format(time.RFC3339Nano), profileID, scenario.ID)
+	if err != nil {
+		return false, fmt.Errorf("update verification scenario: %w", err)
+	}
+
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count updated verification scenarios: %w", err)
+	}
+
+	return updated > 0, nil
+}
+
 // シナリオDBマイグレーション
 func migrateVerificationScenarioDatabase(ctx context.Context, database *sql.DB) error {
 	var version int

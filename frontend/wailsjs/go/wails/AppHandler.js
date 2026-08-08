@@ -77,3 +77,7 @@ export function SaveFlowState(arg1) {
 export function UpdateTableCell(arg1) {
   return window['go']['wails']['AppHandler']['UpdateTableCell'](arg1);
 }
+
+export function UpdateVerificationScenario(arg1) {
+  return window['go']['wails']['AppHandler']['UpdateVerificationScenario'](arg1);
+}

@@ -1435,6 +1435,24 @@ export namespace wails {
 		    return a;
 		}
 	}
+	export class UpdateVerificationScenarioRequest {
+	    scenarioId: string;
+	    name: string;
+	    primaryTable: string;
+	    definition: Record<string, any>;
+
+	    static createFrom(source: any = {}) {
+	        return new UpdateVerificationScenarioRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scenarioId = source["scenarioId"];
+	        this.name = source["name"];
+	        this.primaryTable = source["primaryTable"];
+	        this.definition = source["definition"];
+	    }
+	}
 
 
 }

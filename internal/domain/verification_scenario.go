@@ -115,6 +115,26 @@ func (d VerificationScenarioDraft) NewVerificationScenario(id string, createdAt 
 	return NewVerificationScenario(id, d.Name, d.PrimaryTable, definitionJSON, nil, createdAt, createdAt)
 }
 
+// 更新用検証シナリオ生成
+func (d VerificationScenarioDraft) UpdateVerificationScenario(scenario VerificationScenario, updatedAt time.Time) (VerificationScenario, error) {
+	if scenario.ID == "" {
+		return VerificationScenario{}, ErrInvalidVerificationScenarioDraft
+	}
+	if err := d.Validate(); err != nil {
+		return VerificationScenario{}, err
+	}
+
+	return VerificationScenario{
+		ID:            scenario.ID,
+		Name:          d.Name,
+		PrimaryTable:  d.PrimaryTable,
+		Definition:    d.Definition,
+		WorkspaceName: scenario.WorkspaceName,
+		CreatedAt:     scenario.CreatedAt,
+		UpdatedAt:     updatedAt.UTC(),
+	}, nil
+}
+
 // 検証シナリオ生成
 func NewVerificationScenario(id, name, primaryTable string, definitionJSON []byte, workspaceName *string, createdAt, updatedAt time.Time) (VerificationScenario, error) {
 	var definition map[string]any

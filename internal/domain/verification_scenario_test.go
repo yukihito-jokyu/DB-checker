@@ -571,6 +571,79 @@ func repeatedStatements(count int) []string {
 	return statements
 }
 
+// シナリオ下書きの更新用変換検証
+func TestVerificationScenarioDraftUpdateVerificationScenario(t *testing.T) {
+	workspaceName := "verification_orders"
+	createdAt := time.Date(2026, time.August, 8, 11, 0, 0, 0, time.FixedZone("JST", 9*60*60))
+	updatedAt := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.FixedZone("JST", 9*60*60))
+	existing := VerificationScenario{
+		ID:            "scenario-1",
+		Name:          "更新前",
+		PrimaryTable:  "orders",
+		Definition:    validVerificationScenarioDefinition(),
+		WorkspaceName: &workspaceName,
+		CreatedAt:     createdAt,
+		UpdatedAt:     createdAt,
+	}
+	draft, err := NewVerificationScenarioDraft("更新後", "orders", validVerificationScenarioDefinition())
+	if err != nil {
+		t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+	}
+	tests := []struct {
+		name      string
+		scenario  VerificationScenario
+		draft     VerificationScenarioDraft
+		wantError error
+	}{
+		{
+			name:     "識別情報とワークスペースを保持してUTC更新日時を設定する",
+			scenario: existing,
+			draft:    draft,
+		},
+		{
+			name:      "IDなしを拒否する",
+			scenario:  VerificationScenario{},
+			draft:     draft,
+			wantError: ErrInvalidVerificationScenarioDraft,
+		},
+		{
+			name:     "形式違反の下書きを拒否する",
+			scenario: existing,
+			draft: VerificationScenarioDraft{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			},
+			wantError: ErrInvalidVerificationScenarioDraft,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.draft.UpdateVerificationScenario(tt.scenario, updatedAt)
+			if tt.wantError != nil {
+				if !errors.Is(err, tt.wantError) {
+					t.Errorf("UpdateVerificationScenario() error = %v, want %v", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("UpdateVerificationScenario() error = %v", err)
+			}
+			if got.ID != existing.ID || !got.CreatedAt.Equal(existing.CreatedAt) || got.WorkspaceName != existing.WorkspaceName {
+				t.Errorf("UpdateVerificationScenario() = %#v, want preserved identity and workspace", got)
+			}
+			if got.UpdatedAt.Location() != time.UTC || !got.UpdatedAt.Equal(updatedAt.UTC()) {
+				t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, updatedAt.UTC())
+			}
+			if got.Name != draft.Name || got.PrimaryTable != draft.PrimaryTable || !reflect.DeepEqual(got.Definition, draft.Definition) {
+				t.Errorf("UpdateVerificationScenario() = %#v, want draft values", got)
+			}
+		})
+	}
+}
+
 // 検証シナリオ生成検証
 func TestNewVerificationScenario(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 8, 11, 0, 0, 0, time.UTC)

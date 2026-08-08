@@ -28,6 +28,8 @@ type verificationScenarioHandlerRepositoryStub struct {
 	found       bool
 	err         error
 	createCalls *int
+	updateCalls *int
+	updateFound bool
 }
 
 // プロファイル読込再現
@@ -52,6 +54,15 @@ func (s verificationScenarioHandlerRepositoryStub) CreateVerificationScenario(_ 
 	}
 
 	return s.err
+}
+
+// シナリオ更新再現
+func (s verificationScenarioHandlerRepositoryStub) UpdateVerificationScenario(_ context.Context, _ string, _ domain.VerificationScenario) (bool, error) {
+	if s.updateCalls != nil {
+		*s.updateCalls++
+	}
+
+	return s.updateFound, s.err
 }
 
 // シナリオ作成ハンドラー応答検証
@@ -203,6 +214,183 @@ func createRequestWithoutPrimaryKeyGenerator() CreateVerificationScenarioRequest
 	}
 
 	return request
+}
+
+// 有効な更新要求生成
+func validUpdateVerificationScenarioRequest() UpdateVerificationScenarioRequest {
+	request := validCreateVerificationScenarioRequest()
+
+	return UpdateVerificationScenarioRequest{
+		ScenarioID:   "scenario-1",
+		Name:         request.Name,
+		PrimaryTable: request.PrimaryTable,
+		Definition:   request.Definition,
+	}
+}
+
+// 主対象生成規則なしの更新要求生成
+func updateRequestWithoutPrimaryKeyGenerator() UpdateVerificationScenarioRequest {
+	request := validUpdateVerificationScenarioRequest()
+	request.Definition["columnGenerators"] = map[string]any{
+		"orders":      map[string]any{"id": map[string]any{"kind": "fixed"}},
+		"order_items": map[string]any{"id": map[string]any{"kind": "uuid"}},
+	}
+
+	return request
+}
+
+// シナリオ更新ハンドラー応答検証
+func TestAppHandlerUpdateVerificationScenario(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	workspaceName := "workspace-1"
+	existing := domain.VerificationScenario{
+		ID:            "scenario-1",
+		Name:          "更新前",
+		PrimaryTable:  "orders",
+		Definition:    validCreateVerificationScenarioRequest().Definition,
+		WorkspaceName: &workspaceName,
+		CreatedAt:     time.Date(2026, time.August, 8, 11, 0, 0, 0, time.FixedZone("JST", 9*60*60)),
+		UpdatedAt:     time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC),
+	}
+	tests := []struct {
+		name            string
+		useCaseNil      bool
+		profiles        verificationScenarioHandlerProfilesStub
+		repository      verificationScenarioHandlerRepositoryStub
+		request         UpdateVerificationScenarioRequest
+		wantCode        apperr.Code
+		wantUpdateCalls int
+	}{
+		{
+			name: "更新結果をDTOで返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			repository: verificationScenarioHandlerRepositoryStub{
+				scenario:    existing,
+				found:       true,
+				updateFound: true,
+			},
+			request:         validUpdateVerificationScenarioRequest(),
+			wantUpdateCalls: 1,
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			useCaseNil: true,
+			request:    validUpdateVerificationScenarioRequest(),
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "形式違反を安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request: UpdateVerificationScenarioRequest{
+				ScenarioID:   "scenario-1",
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "主対象の一意生成規則不足を安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request:  updateRequestWithoutPrimaryKeyGenerator(),
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+		{
+			name: "他プロファイルのシナリオを安全な失敗で返す",
+			profiles: verificationScenarioHandlerProfilesStub{
+				profiles: []domain.Profile{profile},
+				activeID: stringPointer(profile.ID),
+			},
+			request:  validUpdateVerificationScenarioRequest(),
+			wantCode: apperr.CodeScenarioNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var scenarioUseCase *usecase.VerificationScenarioUseCase
+			updateCalls := 0
+			if !tt.useCaseNil {
+				repository := tt.repository
+				repository.updateCalls = &updateCalls
+				scenarioUseCase = usecase.NewVerificationScenarioUseCase(tt.profiles, repository)
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), nil, scenarioUseCase)
+
+			got := handler.UpdateVerificationScenario(tt.request)
+			if tt.wantCode == "" {
+				if got.Error != nil {
+					t.Fatalf("UpdateVerificationScenario() Error = %#v, want nil", got.Error)
+				}
+				if got.Data == nil {
+					t.Fatal("UpdateVerificationScenario() Data = nil, want non-nil")
+				}
+				if got.Data.ID != existing.ID {
+					t.Errorf("Data.ID = %q, want %q", got.Data.ID, existing.ID)
+				}
+				if got.Data.Name != tt.request.Name {
+					t.Errorf("Data.Name = %q, want %q", got.Data.Name, tt.request.Name)
+				}
+				if got.Data.PrimaryTable != tt.request.PrimaryTable {
+					t.Errorf("Data.PrimaryTable = %q, want %q", got.Data.PrimaryTable, tt.request.PrimaryTable)
+				}
+				expectedDraft, err := domain.NewVerificationScenarioDraft(tt.request.Name, tt.request.PrimaryTable, tt.request.Definition)
+				if err != nil {
+					t.Fatalf("NewVerificationScenarioDraft() error = %v", err)
+				}
+				if !reflect.DeepEqual(got.Data.Definition, expectedDraft.Definition) {
+					t.Errorf("Data.Definition = %#v, want %#v", got.Data.Definition, expectedDraft.Definition)
+				}
+				if !reflect.DeepEqual(got.Data.WorkspaceName, existing.WorkspaceName) {
+					t.Errorf("Data.WorkspaceName = %#v, want %#v", got.Data.WorkspaceName, existing.WorkspaceName)
+				}
+				if got.Data.CreatedAt != existing.CreatedAt.UTC().Format(time.RFC3339Nano) {
+					t.Errorf("Data.CreatedAt = %q, want %q", got.Data.CreatedAt, existing.CreatedAt.UTC().Format(time.RFC3339Nano))
+				}
+				updatedAt, err := time.Parse(time.RFC3339Nano, got.Data.UpdatedAt)
+				if err != nil {
+					t.Errorf("Data.UpdatedAt = %q, want RFC3339Nano time: %v", got.Data.UpdatedAt, err)
+				} else if updatedAt.Location() != time.UTC || got.Data.UpdatedAt != updatedAt.UTC().Format(time.RFC3339Nano) {
+					t.Errorf("Data.UpdatedAt = %q, want UTC RFC3339Nano time", got.Data.UpdatedAt)
+				}
+				if got.Data.LatestRun != nil {
+					t.Errorf("Data.LatestRun = %#v, want nil", got.Data.LatestRun)
+				}
+			} else {
+				if got.Data != nil {
+					t.Errorf("UpdateVerificationScenario() Data = %#v, want nil", got.Data)
+				}
+				if got.Error == nil {
+					t.Fatal("UpdateVerificationScenario() Error = nil, want error response")
+				}
+				if got.Error.Code != string(tt.wantCode) {
+					t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+				}
+				if got.Error.Message == "" || bytes.Contains([]byte(got.Error.Message), []byte("secret")) {
+					t.Errorf("Error.Message = %q, want safe non-empty message", got.Error.Message)
+				}
+				if !bytes.Contains(output.Bytes(), []byte("code="+string(tt.wantCode))) {
+					t.Errorf("log = %q, want code=%s", output.String(), tt.wantCode)
+				}
+			}
+			if bytes.Contains(output.Bytes(), []byte("secret")) || bytes.Contains(output.Bytes(), []byte("verification.sqlite3")) {
+				t.Errorf("log = %q, must not contain sensitive details", output.String())
+			}
+			if updateCalls != tt.wantUpdateCalls {
+				t.Errorf("UpdateVerificationScenario() repository calls = %d, want %d", updateCalls, tt.wantUpdateCalls)
+			}
+		})
+	}
 }
 
 // シナリオ詳細ハンドラー応答検証
