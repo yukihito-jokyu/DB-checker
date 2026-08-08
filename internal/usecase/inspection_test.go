@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -29,6 +30,8 @@ type inspectionRepositoryStub struct {
 	affectedRows    domain.AffectedRows
 	insertRowErr    error
 	updateCellErr   error
+	deleteRowErr    error
+	deleteRowCalled bool
 }
 
 // プロファイル読込再現
@@ -97,6 +100,13 @@ func (s *inspectionRepositoryStub) InsertRow(context.Context, domain.Profile, st
 // テーブルセル更新再現
 func (s *inspectionRepositoryStub) UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error) {
 	return s.affectedRows, s.updateCellErr
+}
+
+// テーブル行削除再現
+func (s *inspectionRepositoryStub) DeleteRow(context.Context, domain.Profile, string, domain.TableRef, domain.RowLocator) (domain.AffectedRows, error) {
+	s.deleteRowCalled = true
+
+	return s.affectedRows, s.deleteRowErr
 }
 
 // データベーススキーマ取得検証
@@ -1254,6 +1264,228 @@ func TestAppUseCaseUpdateTableCell(t *testing.T) {
 			}
 			if tt.wantCode == "" && got.AffectedRows != 1 {
 				t.Errorf("UpdateTableCell() = %#v, want affected rows 1", got)
+			}
+		})
+	}
+}
+
+// テーブル行削除検証
+func TestAppUseCaseDeleteTableRow(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	id := "1"
+	locator := domain.RowLocator{Values: []domain.ColumnValueInput{
+		{
+			Column: "id",
+			Kind:   domain.CellKindValue,
+			Value:  &id,
+		},
+	}}
+	structure := domain.TableStructure{Table: domain.Table{
+		Namespace: profile.Schema,
+		Name:      "users",
+		Columns: []domain.Column{
+			{
+				Name:         "id",
+				DataType:     "int4",
+				IsPrimaryKey: true,
+			},
+		},
+	}}
+	tests := []struct {
+		name       string
+		repository *inspectionRepositoryStub
+		table      string
+		locator    domain.RowLocator
+		wantCode   apperr.Code
+		wantRows   int64
+		wantDelete bool
+	}{
+		{
+			name: "行を削除できる",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				affectedRows:    domain.AffectedRows{AffectedRows: 2},
+			},
+			table:      "users",
+			locator:    locator,
+			wantRows:   2,
+			wantDelete: true,
+		},
+		{
+			name: "不正位置指定はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+			},
+			table:    "users",
+			locator:  domain.RowLocator{},
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "repository起因の入力変換失敗はVALIDATION_FAILEDを返す",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				deleteRowErr:    fmt.Errorf("invalid binary locator: %w", domain.ErrInvalidRowInput),
+			},
+			table:      "users",
+			locator:    locator,
+			wantCode:   apperr.CodeValidationFailed,
+			wantDelete: true,
+		},
+		{
+			name: "削除失敗はROW_DELETE_FAILEDを返す",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				deleteRowErr:    errors.New("delete failed"),
+			},
+			table:      "users",
+			locator:    locator,
+			wantCode:   apperr.CodeRowDeleteFailed,
+			wantDelete: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewAppUseCase(tt.repository).DeleteTableRow(context.Background(), tt.table, tt.locator)
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Fatalf("DeleteTableRow() error code = %q, want %q", gotCode, tt.wantCode)
+			}
+			if got.AffectedRows != tt.wantRows {
+				t.Errorf("DeleteTableRow() = %#v, want rows %d", got, tt.wantRows)
+			}
+			if tt.repository.deleteRowCalled != tt.wantDelete {
+				t.Errorf("DeleteRow() called = %t, want %t", tt.repository.deleteRowCalled, tt.wantDelete)
+			}
+		})
+	}
+}
+
+// テーブル行削除失敗検証
+func TestAppUseCaseDeleteTableRowFailures(t *testing.T) {
+	profile := inspectionTestProfile(t)
+	id := "1"
+	locator := domain.RowLocator{Values: []domain.ColumnValueInput{
+		{
+			Column: "id",
+			Kind:   domain.CellKindValue,
+			Value:  &id,
+		},
+	}}
+	structure := domain.TableStructure{Table: domain.Table{
+		Namespace: profile.Schema,
+		Name:      "users",
+		Columns: []domain.Column{
+			{
+				Name:         "id",
+				DataType:     "int4",
+				IsPrimaryKey: true,
+			},
+		},
+	}}
+	validRepository := func() *inspectionRepositoryStub {
+		return &inspectionRepositoryStub{
+			profiles:        []domain.Profile{profile},
+			activeID:        &profile.ID,
+			credential:      "secret",
+			credentialFound: true,
+			structure:       structure,
+		}
+	}
+	tests := []struct {
+		name       string
+		repository *inspectionRepositoryStub
+		table      string
+		wantCode   apperr.Code
+	}{
+		{
+			name: "プロファイル読込失敗を返す",
+			repository: &inspectionRepositoryStub{
+				loadErr: errors.New("load failed"),
+			},
+			table:    "users",
+			wantCode: "",
+		},
+		{
+			name:       "アクティブプロファイルなしを返す",
+			repository: &inspectionRepositoryStub{},
+			table:      "users",
+			wantCode:   apperr.CodeProfileNotFound,
+		},
+		{
+			name: "アクティブプロファイル不在を返す",
+			repository: &inspectionRepositoryStub{
+				activeID: &profile.ID,
+			},
+			table:    "users",
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name:       "不正テーブル名を検証する",
+			repository: validRepository(),
+			table:      "",
+			wantCode:   apperr.CodeValidationFailed,
+		},
+		{
+			name: "資格情報取得失敗を返す",
+			repository: &inspectionRepositoryStub{
+				profiles:      []domain.Profile{profile},
+				activeID:      &profile.ID,
+				credentialErr: errors.New("credential failed"),
+			},
+			table:    "users",
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "資格情報不在を返す",
+			repository: &inspectionRepositoryStub{
+				profiles: []domain.Profile{profile},
+				activeID: &profile.ID,
+			},
+			table:    "users",
+			wantCode: apperr.CodeCredentialUnavailable,
+		},
+		{
+			name: "構造取得失敗を返す",
+			repository: &inspectionRepositoryStub{
+				profiles:        []domain.Profile{profile},
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structureErr:    errors.New("structure failed"),
+			},
+			table:    "users",
+			wantCode: apperr.CodeRowDeleteFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewAppUseCase(tt.repository).DeleteTableRow(context.Background(), tt.table, locator)
+			if tt.wantCode == "" {
+				if err == nil || err.Error() != "load failed" {
+					t.Errorf("DeleteTableRow() error = %v, want %q", err, "load failed")
+				}
+
+				return
+			}
+			if gotCode := inspectionErrorCode(err); gotCode != tt.wantCode {
+				t.Errorf("DeleteTableRow() error code = %q, want %q", gotCode, tt.wantCode)
 			}
 		})
 	}

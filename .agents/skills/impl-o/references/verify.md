@@ -4,7 +4,7 @@
 
 ## 検証候補
 
-- Go: `task test`, `task format:check`, `task lint`, `task backend:check`
+- Go: `task test:style`, `task test`, `task format:check`, `task lint`, `task backend:check`
 - frontend: `task frontend:check`, `task frontend:build`
 - Wails連携: `task generate`, 必要に応じて起動確認
 - ドキュメント/skill: `quick_validate.py <skill-folder>`、リンク/参照整合性確認
@@ -12,7 +12,9 @@
 
 ## カバレッジ目標
 
-受け入れ条件またはユーザー指示にカバレッジ目標がある場合は、対象パッケージで `go test -coverprofile` を実行し、`go tool cover -func` で対象ファイル・関数の達成を確認する。パッケージ全体の値と対象ファイルの値は区別して記録する。
+新規または変更した Go 関数・メソッドは、対象パッケージと対象関数を列挙して `task test:coverage:check` を実行する。実行可能なステートメントは原則 100% とし、パッケージ全体の値と対象関数の値を区別して記録する。
+
+未到達箇所はテスト追加を優先する。test double を含めても単体テストで到達不能な場合だけ、未到達ステートメントの直前に `// 単体テスト到達不可: 具体的な理由` を記載する。検査結果には生のカバレッジ、コメントにより許容した実効カバレッジ、除外件数を残す。
 
 ## 出力
 
@@ -38,4 +40,5 @@
 - Taskfileにある操作を優先する。
 - 実行できない検証を黙って省略しない。
 - 手動検証の期待結果に、秘密情報や内部エラーの表示を含めない。
-- カバレッジ目標がある場合は、テスト成功だけで達成と判断しない。
+- Go テストを変更した場合は `task test:style` を省略しない。
+- Go 実装を新規追加または変更した場合は、テスト成功だけでカバレッジ達成と判断しない。

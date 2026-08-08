@@ -3003,9 +3003,16 @@ func TestUpdateCellSQLVariants(t *testing.T) {
 		{
 			name:   "PostgreSQL既定値更新はプレースホルダーを使わない",
 			dbType: domain.DBTypePostgres,
-			ref:    domain.TableRef{Namespace: "public", Name: "items"},
+			ref: domain.TableRef{
+				Namespace: "public",
+				Name:      "items",
+			},
 			columns: []domain.Column{
-				{Name: "id", DataType: "int4", IsPrimaryKey: true},
+				{
+					Name:         "id",
+					DataType:     "int4",
+					IsPrimaryKey: true,
+				},
 				{Name: "name", DataType: "text", DefaultValue: &name},
 			},
 			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "name", Value: domain.CellValue{Kind: domain.CellKindDefault}},
@@ -3085,9 +3092,16 @@ func TestUpdateCellSQLVariants(t *testing.T) {
 		{
 			name:   "NULL更新を実行する",
 			dbType: domain.DBTypePostgres,
-			ref:    domain.TableRef{Namespace: "public", Name: "items"},
+			ref: domain.TableRef{
+				Namespace: "public",
+				Name:      "items",
+			},
 			columns: []domain.Column{
-				{Name: "id", DataType: "int4", IsPrimaryKey: true},
+				{
+					Name:         "id",
+					DataType:     "int4",
+					IsPrimaryKey: true,
+				},
 				{Name: "note", DataType: "text", Nullable: true},
 			},
 			change: domain.CellUpdate{Table: domain.TableRef{Namespace: "public", Name: "items"}, Locator: domain.RowLocator{Values: []domain.ColumnValueInput{{Column: "id", Kind: domain.CellKindValue, Value: &id}}}, Column: "note", Value: domain.CellValue{Kind: domain.CellKindNull}},
@@ -3145,5 +3159,341 @@ func updateCellStructureResponses(dbType domain.DBType, columns []domain.Column)
 		{query: postgresTableStructureColumnQuery, columns: []string{"column_name", "udt_name", "is_nullable", "column_default", "is_generated", "is_primary_key", "is_foreign_key", "is_unique"}, values: values, errorAt: -1},
 		{query: postgresTableStructureForeignKeyQuery, columns: []string{"constraint_name", "table_name", "column_name", "referenced_table_name", "referenced_column_name"}, values: [][]driver.Value{}, errorAt: -1},
 		{query: postgresTableStructureIndexQuery, columns: []string{"relname", "attname", "indisunique", "amname"}, values: [][]driver.Value{}, errorAt: -1},
+	}
+}
+
+// テーブル行削除SQL検証
+func TestDeleteRow(t *testing.T) {
+	id := "1"
+	note := "before"
+	tests := []struct {
+		name    string
+		dbType  domain.DBType
+		ref     domain.TableRef
+		columns []domain.Column
+		locator domain.RowLocator
+		query   string
+		args    []driver.NamedValue
+		want    domain.AffectedRows
+	}{
+		{
+			name:   "PostgreSQL主キー行を削除する",
+			dbType: domain.DBTypePostgres,
+			ref: domain.TableRef{
+				Namespace: "public",
+				Name:      "items",
+			},
+			columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					IsPrimaryKey: true,
+				},
+			},
+			locator: domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindValue,
+						Value:  &id,
+					},
+				},
+			},
+			query: `DELETE FROM "public"."items" WHERE "id" = $1`,
+			args: []driver.NamedValue{
+				{
+					Ordinal: 1,
+					Value:   "1",
+				},
+			},
+			want: domain.AffectedRows{
+				AffectedRows: 2,
+			},
+		},
+		{
+			name:   "MySQL主キーなし行をNULL条件で削除する",
+			dbType: domain.DBTypeMySQL,
+			ref: domain.TableRef{
+				Namespace: "app",
+				Name:      "logs",
+			},
+			columns: []domain.Column{
+				{
+					Name:     "note",
+					DataType: "varchar(32)",
+				},
+				{
+					Name:     "deleted_at",
+					DataType: "timestamp",
+					Nullable: true,
+				},
+			},
+			locator: domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "note",
+						Kind:   domain.CellKindValue,
+						Value:  &note,
+					},
+					{
+						Column: "deleted_at",
+						Kind:   domain.CellKindNull,
+					},
+				},
+			},
+			query: "DELETE FROM `app`.`logs` WHERE `note` = ? AND `deleted_at` IS NULL",
+			args: []driver.NamedValue{
+				{
+					Ordinal: 1,
+					Value:   "before",
+				},
+			},
+			want: domain.AffectedRows{
+				AffectedRows: 0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			responses := updateCellStructureResponses(tt.dbType, tt.columns)
+			responses = append(responses, inspectionTestResponse{
+				query:        tt.query,
+				args:         tt.args,
+				execAffected: tt.want.AffectedRows,
+				errorAt:      -1,
+			})
+			database, scenario := newInspectionTestDatabase(t, responses)
+			defer database.Close()
+
+			got, err := deleteRow(context.Background(), database, tt.dbType, tt.ref, tt.locator)
+			if err != nil {
+				t.Fatalf("deleteRow() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("deleteRow() = %#v, want %#v", got, tt.want)
+			}
+			assertInspectionQueriesConsumed(t, scenario)
+		})
+	}
+}
+
+// テーブル行削除失敗検証
+func TestDeleteRowFailures(t *testing.T) {
+	id := "1"
+	invalidBinary := "not-base64"
+	ref := domain.TableRef{
+		Namespace: "public",
+		Name:      "items",
+	}
+	tests := []struct {
+		name      string
+		columns   []domain.Column
+		locator   domain.RowLocator
+		responses []inspectionTestResponse
+		wantError string
+	}{
+		{
+			name: "構造取得失敗を返す",
+			responses: []inspectionTestResponse{
+				{
+					query:   postgresTableStructureColumnQuery,
+					err:     errors.New("structure failed"),
+					errorAt: -1,
+				},
+			},
+			wantError: "structure failed",
+		},
+		{
+			name: "不正位置指定を返す",
+			columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					IsPrimaryKey: true,
+				},
+			},
+			locator:   domain.RowLocator{},
+			wantError: domain.ErrInvalidRowInput.Error(),
+		},
+		{
+			name: "位置指定値の変換失敗を返す",
+			columns: []domain.Column{
+				{
+					Name:         "binary_data",
+					DataType:     "bytea",
+					IsPrimaryKey: true,
+				},
+			},
+			locator: domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "binary_data",
+						Kind:   domain.CellKindValue,
+						Value:  &invalidBinary,
+					},
+				},
+			},
+			wantError: "invalid base64 value for binary column",
+		},
+		{
+			name: "削除実行失敗を返す",
+			columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					IsPrimaryKey: true,
+				},
+			},
+			locator: domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindValue,
+						Value:  &id,
+					},
+				},
+			},
+			responses: []inspectionTestResponse{
+				{
+					query:   `DELETE FROM "public"."items" WHERE "id" = $1`,
+					err:     errors.New("delete failed"),
+					errorAt: -1,
+				},
+			},
+			wantError: "delete failed",
+		},
+		{
+			name: "影響行数取得失敗を返す",
+			columns: []domain.Column{
+				{
+					Name:         "id",
+					DataType:     "int4",
+					IsPrimaryKey: true,
+				},
+			},
+			locator: domain.RowLocator{
+				Values: []domain.ColumnValueInput{
+					{
+						Column: "id",
+						Kind:   domain.CellKindValue,
+						Value:  &id,
+					},
+				},
+			},
+			responses: []inspectionTestResponse{
+				{
+					query:           `DELETE FROM "public"."items" WHERE "id" = $1`,
+					rowsAffectedErr: errors.New("affected rows failed"),
+					errorAt:         -1,
+				},
+			},
+			wantError: "affected rows failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			responses := tt.responses
+			if tt.name != "構造取得失敗を返す" {
+				responses = updateCellStructureResponses(domain.DBTypePostgres, tt.columns)
+				responses = append(responses, tt.responses...)
+			}
+			database, _ := newInspectionTestDatabase(t, responses)
+			defer database.Close()
+
+			_, err := deleteRow(context.Background(), database, domain.DBTypePostgres, ref, tt.locator)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Errorf("deleteRow() error = %v, want containing %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+// テーブル行削除接続検証
+func TestAppRepositoryDeleteRow(t *testing.T) {
+	profile := connectionTestProfile(t, domain.DBTypePostgres)
+	id := "1"
+	ref := domain.TableRef{
+		Namespace: "public",
+		Name:      "items",
+	}
+	locator := domain.RowLocator{
+		Values: []domain.ColumnValueInput{
+			{
+				Column: "id",
+				Kind:   domain.CellKindValue,
+				Value:  &id,
+			},
+		},
+	}
+	originalOpenDatabase := openDatabase
+	t.Cleanup(func() { openDatabase = originalOpenDatabase })
+	tests := []struct {
+		name      string
+		open      func(string, string) (*sql.DB, error)
+		ctx       context.Context
+		wantError string
+	}{
+		{
+			name: "接続生成失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			ctx:       context.Background(),
+			wantError: "open failed",
+		},
+		{
+			name: "接続確認失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				database, _ := newInspectionTestDatabase(t, nil)
+
+				return database, nil
+			},
+			ctx:       canceledInspectionContext(),
+			wantError: context.Canceled.Error(),
+		},
+		{
+			name: "行を削除する",
+			open: func(string, string) (*sql.DB, error) {
+				responses := updateCellStructureResponses(domain.DBTypePostgres, []domain.Column{
+					{
+						Name:         "id",
+						DataType:     "int4",
+						IsPrimaryKey: true,
+					},
+				})
+				responses = append(responses, inspectionTestResponse{
+					query:        `DELETE FROM "public"."items" WHERE "id" = $1`,
+					execAffected: 1,
+					errorAt:      -1,
+				})
+				database, _ := newInspectionTestDatabase(t, responses)
+
+				return database, nil
+			},
+			ctx: context.Background(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openDatabase = tt.open
+
+			got, err := NewAppRepository(nil).DeleteRow(tt.ctx, profile, "secret", ref, locator)
+			if tt.wantError != "" {
+				if err == nil || err.Error() != tt.wantError {
+					t.Errorf("DeleteRow() error = %v, want %q", err, tt.wantError)
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("DeleteRow() error = %v", err)
+			}
+			if got.AffectedRows != 1 {
+				t.Errorf("AffectedRows = %d, want 1", got.AffectedRows)
+			}
+		})
 	}
 }

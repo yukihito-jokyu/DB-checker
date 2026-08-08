@@ -38,6 +38,7 @@ type schemaRepositoryStub struct {
 	affectedRows    domain.AffectedRows
 	insertRowErr    error
 	updateCellErr   error
+	deleteRowErr    error
 }
 
 // プロファイル読込再現
@@ -104,6 +105,11 @@ func (s *schemaRepositoryStub) InsertRow(context.Context, domain.Profile, string
 // テーブルセル更新再現
 func (s *schemaRepositoryStub) UpdateCell(context.Context, domain.Profile, string, domain.TableRef, domain.CellUpdate) (domain.AffectedRows, error) {
 	return s.affectedRows, s.updateCellErr
+}
+
+// テーブル行削除再現
+func (s *schemaRepositoryStub) DeleteRow(context.Context, domain.Profile, string, domain.TableRef, domain.RowLocator) (domain.AffectedRows, error) {
+	return s.affectedRows, s.deleteRowErr
 }
 
 // データベーススキーマ取得レスポンス検証
@@ -966,5 +972,101 @@ func TestAppHandlerUpdateTableCellWithoutUseCase(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), string(apperr.CodeCellUpdateFailed)) {
 		t.Errorf("log = %q, want code %q", output.String(), apperr.CodeCellUpdateFailed)
+	}
+}
+
+// テーブル行削除ハンドラーレスポンス検証
+func TestAppHandlerDeleteTableRow(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypePostgres)
+	id := "1"
+	structure := domain.TableStructure{Table: domain.Table{
+		Namespace: profile.Schema,
+		Name:      "users",
+		Columns: []domain.Column{
+			{
+				Name:         "id",
+				DataType:     "int4",
+				IsPrimaryKey: true,
+			},
+		},
+	}}
+	request := DeleteTableRowRequest{
+		Table: "users",
+		Locator: []ColumnValueInputRequest{
+			{
+				Column: "id",
+				Kind:   "value",
+				Value:  &id,
+			},
+		},
+	}
+	tests := []struct {
+		name       string
+		repository *schemaRepositoryStub
+		request    DeleteTableRowRequest
+		want       Response[AffectedRowsResponse]
+		avoidLogs  []string
+	}{
+		{
+			name: "行を削除できる",
+			repository: &schemaRepositoryStub{
+				profile:         profile,
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				affectedRows:    domain.AffectedRows{AffectedRows: 2},
+			},
+			request: request,
+			want:    OK(AffectedRowsResponse{AffectedRows: 2}),
+		},
+		{
+			name: "削除失敗時は安全なエラーを返す",
+			repository: &schemaRepositoryStub{
+				profile:         profile,
+				activeID:        &profile.ID,
+				credential:      "secret",
+				credentialFound: true,
+				structure:       structure,
+				deleteRowErr:    errors.New("password=secret locator=1"),
+			},
+			request: request,
+			want:    Fail[AffectedRowsResponse](apperr.New(apperr.CodeRowDeleteFailed)),
+			avoidLogs: []string{
+				"password=secret",
+				"locator=1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), usecase.NewAppUseCase(tt.repository))
+			got := handler.DeleteTableRow(tt.request)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("DeleteTableRow() = %#v, want %#v", got, tt.want)
+			}
+			for _, avoidLog := range tt.avoidLogs {
+				if strings.Contains(output.String(), avoidLog) {
+					t.Errorf("log = %q, must not contain %q", output.String(), avoidLog)
+				}
+			}
+		})
+	}
+}
+
+// テーブル行削除ハンドラー未設定検証
+func TestAppHandlerDeleteTableRowWithoutUseCase(t *testing.T) {
+	var output bytes.Buffer
+	handler := NewAppHandler(applogger.NewWithWriter(&output, slog.LevelDebug), config.NewStore(t.TempDir()), nil)
+
+	got := handler.DeleteTableRow(DeleteTableRowRequest{})
+	want := Fail[AffectedRowsResponse](apperr.New(apperr.CodeRowDeleteFailed))
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("DeleteTableRow() = %#v, want %#v", got, want)
+	}
+	if !strings.Contains(output.String(), string(apperr.CodeRowDeleteFailed)) {
+		t.Errorf("log = %q, want code %q", output.String(), apperr.CodeRowDeleteFailed)
 	}
 }

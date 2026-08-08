@@ -182,6 +182,11 @@ type UpdateTableCellRequest struct {
 	Value   TableCellResponse         `json:"value"`
 }
 
+type DeleteTableRowRequest struct {
+	Table   string                    `json:"table"`
+	Locator []ColumnValueInputRequest `json:"locator"`
+}
+
 type AffectedRowsResponse struct {
 	AffectedRows int64 `json:"affectedRows"`
 }

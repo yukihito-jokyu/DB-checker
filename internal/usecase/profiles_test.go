@@ -132,6 +132,11 @@ func (*appRepositoryStub) UpdateCell(context.Context, domain.Profile, string, do
 	return domain.AffectedRows{}, nil
 }
 
+// テーブル行削除再現
+func (*appRepositoryStub) DeleteRow(context.Context, domain.Profile, string, domain.TableRef, domain.RowLocator) (domain.AffectedRows, error) {
+	return domain.AffectedRows{}, nil
+}
+
 // 接続プロファイル読込
 func TestAppUseCaseLoadProfiles(t *testing.T) {
 	profile, err := domain.NewProfile("profile-1", "Local DB", domain.DBTypePostgres, "localhost", 5432, "app", "public", "user")

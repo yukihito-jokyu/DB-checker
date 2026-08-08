@@ -20,12 +20,69 @@ tasks:
     cmds:
       - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test ./...
 
+  test:style:
+    desc: Go テストの複合リテラル改行規約を検査する
+    cmds:
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go run .agents/skills/go-test-style/scripts/check_test_literal_layout.go -baseline .agents/skills/go-test-style/scripts/test-literal-layout.baseline .
+
+  test:style:baseline:
+    desc: Go テストの複合リテラル改行baselineを更新する
+    cmds:
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go run .agents/skills/go-test-style/scripts/check_test_literal_layout.go -baseline .agents/skills/go-test-style/scripts/test-literal-layout.baseline -write-baseline .
+
+  test:policy:scripts:
+    desc: Go テスト規約検査スクリプトのテストと関数coverage検査を実行する
+    cmds:
+      - mkdir -p coverage
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test .agents/skills/go-test-style/scripts/check_test_literal_layout.go .agents/skills/go-test-style/scripts/check_test_literal_layout_test.go -coverprofile=coverage/test-literal-layout-script.out
+      - >-
+        GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go run .agents/skills/go-test-style/scripts/check_go_coverage.go
+        -profile coverage/test-literal-layout-script.out
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:main:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:runLayoutCheck:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:collectViolations:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:collectTestFiles:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:ignoredDirectory:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:inspectTestFile:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:inspectNode:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:literalSignature:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:saveBaseline:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:loadBaseline:100
+        .agents/skills/go-test-style/scripts/check_test_literal_layout.go:compareBaseline:100
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test .agents/skills/go-test-style/scripts/check_go_coverage.go .agents/skills/go-test-style/scripts/check_go_coverage_test.go -coverprofile=coverage/test-coverage-script.out
+      - >-
+        GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go run .agents/skills/go-test-style/scripts/check_go_coverage.go
+        -profile coverage/test-coverage-script.out
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:main:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:runCoverageCheck:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:loadCoverageProfile:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:parseCoverageBlock:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:parsePositionLine:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:parseCoverageTarget:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:coverageTarget.resolveFunction:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:coverageFunctionName:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:receiverName:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:calculateCoverage:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:sameCoverageFile:100
+        .agents/skills/go-test-style/scripts/check_go_coverage.go:hasUnreachableComment:100
+
   test:coverage:
     desc: Go の単体テストカバレッジ HTML を生成する
     cmds:
       - mkdir -p coverage
       - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test ./... -coverprofile=coverage/coverage.out
       - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go tool cover -html=coverage/coverage.out -o coverage/coverage.html
+
+  test:coverage:check:
+    desc: 指定した Go 関数の単体テストカバレッジを検査する
+    requires:
+      vars: [TARGETS]
+    vars:
+      PACKAGES: '{{default "./..." .PACKAGES}}'
+    cmds:
+      - mkdir -p coverage
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go test {{.PACKAGES}} -coverprofile=coverage/targeted.out
+      - GOCACHE={{.TASKFILE_DIR}}/.cache/go-build go run .agents/skills/go-test-style/scripts/check_go_coverage.go -profile coverage/targeted.out {{.TARGETS}}
 
   format:
     desc: Go ファイルを gofmt で整形する
@@ -51,6 +108,8 @@ tasks:
     desc: Go backend の format / lint / test を実行する
     cmds:
       - task: format:check
+      - task: test:style
+      - task: test:policy:scripts
       - task: lint
       - task: test
 
