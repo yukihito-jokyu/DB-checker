@@ -23,14 +23,37 @@ type verificationScenarioHandlerProfilesStub struct {
 }
 
 type verificationScenarioHandlerRepositoryStub struct {
-	scenarios   []domain.VerificationScenarioSummary
-	scenario    domain.VerificationScenario
-	found       bool
-	err         error
-	createErr   error
-	createCalls *int
-	updateCalls *int
-	updateFound bool
+	scenarios              []domain.VerificationScenarioSummary
+	scenario               domain.VerificationScenario
+	found                  bool
+	err                    error
+	createErr              error
+	createCalls            *int
+	updateCalls            *int
+	updateFound            bool
+	deleteFound            bool
+	deleteWorkspaceRemoved bool
+	deleteBusy             bool
+	deleteCalls            *int
+	workspaceState         string
+	workspaceName          string
+	workspaceFound         bool
+	workspaceErr           error
+	saveWorkspaceErr       error
+	runScenarioID          string
+	runState               string
+	runFound               bool
+	runErr                 error
+	createRunErr           error
+	updateRunFound         bool
+	updateRunErr           error
+	runBusy                bool
+	runBusyErr             error
+}
+
+type verificationScenarioHandlerWorkspaceStub struct {
+	createErr error
+	deleteErr error
 }
 
 // プロファイル読込再現
@@ -68,6 +91,65 @@ func (s verificationScenarioHandlerRepositoryStub) UpdateVerificationScenario(_ 
 	}
 
 	return s.updateFound, s.err
+}
+
+// シナリオ削除再現
+func (s verificationScenarioHandlerRepositoryStub) DeleteVerificationScenario(_ context.Context, _, _ string, _ bool) (bool, bool, bool, error) {
+	if s.deleteCalls != nil {
+		*s.deleteCalls++
+	}
+
+	return s.deleteFound, s.deleteWorkspaceRemoved, s.deleteBusy, s.err
+}
+
+// ワークスペース状態取得再現
+func (s verificationScenarioHandlerRepositoryStub) GetVerificationWorkspace(context.Context, string, string) (string, string, bool, error) {
+	return s.workspaceState, s.workspaceName, s.workspaceFound, s.workspaceErr
+}
+
+// ワークスペース状態保存再現
+func (s verificationScenarioHandlerRepositoryStub) SaveVerificationWorkspace(context.Context, string, string, string, string) error {
+	return s.saveWorkspaceErr
+}
+
+// ワークスペース状態削除再現
+func (verificationScenarioHandlerRepositoryStub) DeleteVerificationWorkspace(context.Context, string, string) error {
+	return nil
+}
+
+// 実行状態作成再現
+func (s verificationScenarioHandlerRepositoryStub) CreateVerificationRun(context.Context, string, string, string) error {
+	return s.createRunErr
+}
+
+// 実行状態取得再現
+func (s verificationScenarioHandlerRepositoryStub) GetVerificationRun(context.Context, string, string) (string, string, bool, error) {
+	return s.runScenarioID, s.runState, s.runFound, s.runErr
+}
+
+// 実行状態更新再現
+func (s verificationScenarioHandlerRepositoryStub) UpdateVerificationRunState(context.Context, string, string, string) (bool, error) {
+	return s.updateRunFound, s.updateRunErr
+}
+
+// シナリオ使用中判定再現
+func (verificationScenarioHandlerRepositoryStub) IsVerificationScenarioBusy(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// 実行使用中判定再現
+func (s verificationScenarioHandlerRepositoryStub) IsVerificationRunBusy(context.Context, string, string) (bool, error) {
+	return s.runBusy, s.runBusyErr
+}
+
+// 外部ワークスペース作成再現
+func (s verificationScenarioHandlerWorkspaceStub) CreateWorkspace(context.Context, domain.Profile, string) error {
+	return s.createErr
+}
+
+// 外部ワークスペース削除再現
+func (s verificationScenarioHandlerWorkspaceStub) DeleteWorkspace(context.Context, domain.Profile, string) error {
+	return s.deleteErr
 }
 
 // シナリオ作成ハンドラー応答検証
@@ -630,6 +712,240 @@ func TestAppHandlerDuplicateVerificationScenario(t *testing.T) {
 			}
 			if createCalls != tt.wantCreateCalls {
 				t.Errorf("CreateVerificationScenario() calls = %d, want %d", createCalls, tt.wantCreateCalls)
+			}
+		})
+	}
+}
+
+// シナリオ削除ハンドラー応答検証
+func TestAppHandlerDeleteVerificationScenario(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	tests := []struct {
+		name       string
+		useCaseNil bool
+		repository verificationScenarioHandlerRepositoryStub
+		wantData   *DeleteScenarioResponse
+		wantCode   apperr.Code
+	}{
+		{
+			name: "workspace削除結果を返す",
+			repository: verificationScenarioHandlerRepositoryStub{
+				deleteFound:            true,
+				deleteWorkspaceRemoved: true,
+			},
+			wantData: &DeleteScenarioResponse{
+				ScenarioID:       "scenario-1",
+				WorkspaceRemoved: true,
+			},
+		},
+		{
+			name:       "未注入ユースケースを安全な失敗で返す",
+			useCaseNil: true,
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "使用中シナリオを安全な失敗で返す",
+			repository: verificationScenarioHandlerRepositoryStub{
+				deleteBusy: true,
+			},
+			wantCode: apperr.CodeScenarioBusy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var scenarioUseCase *usecase.VerificationScenarioUseCase
+			if !tt.useCaseNil {
+				scenarioUseCase = usecase.NewVerificationScenarioUseCase(verificationScenarioHandlerProfilesStub{
+					profiles: []domain.Profile{profile},
+					activeID: stringPointer(profile.ID),
+				}, tt.repository)
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(&bytes.Buffer{}, slog.LevelDebug), config.NewStore(t.TempDir()), nil, scenarioUseCase)
+
+			got := handler.DeleteVerificationScenario(DeleteVerificationScenarioRequest{
+				ScenarioID:      "scenario-1",
+				RemoveWorkspace: true,
+			})
+			if tt.wantCode != "" {
+				if got.Data != nil {
+					t.Errorf("DeleteVerificationScenario() Data = %#v, want nil", got.Data)
+				}
+				if got.Error == nil {
+					t.Fatal("DeleteVerificationScenario() Error = nil, want error response")
+				}
+				if got.Error.Code != string(tt.wantCode) {
+					t.Errorf("Error.Code = %q, want %q", got.Error.Code, tt.wantCode)
+				}
+
+				return
+			}
+			if got.Error != nil {
+				t.Fatalf("DeleteVerificationScenario() Error = %#v, want nil", got.Error)
+			}
+			if got.Data == nil {
+				t.Fatal("DeleteVerificationScenario() Data = nil, want non-nil")
+			}
+			if !reflect.DeepEqual(*got.Data, *tt.wantData) {
+				t.Errorf("DeleteVerificationScenario() Data = %#v, want %#v", *got.Data, *tt.wantData)
+			}
+		})
+	}
+}
+
+// ワークスペースと実行状態ハンドラー応答検証
+func TestAppHandlerVerificationWorkspaceAndRunOperations(t *testing.T) {
+	profile := newTestProfile(t, "profile-1", domain.DBTypeMySQL)
+	tests := []struct {
+		name       string
+		operation  string
+		useCaseNil bool
+		repository verificationScenarioHandlerRepositoryStub
+		wantCode   apperr.Code
+	}{
+		{
+			name:      "ワークスペース開始成功を返す",
+			operation: "enter",
+			repository: verificationScenarioHandlerRepositoryStub{
+				found: true,
+			},
+		},
+		{
+			name:       "ワークスペース開始の未注入を安全な失敗で返す",
+			operation:  "enter",
+			useCaseNil: true,
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name:      "ワークスペース開始のユースケース失敗を安全に返す",
+			operation: "enter",
+			wantCode:  apperr.CodeScenarioNotFound,
+		},
+		{
+			name:      "ワークスペース終了成功を返す",
+			operation: "exit",
+			repository: verificationScenarioHandlerRepositoryStub{
+				found:          true,
+				workspaceFound: true,
+				workspaceState: "test",
+				workspaceName:  "db_checker_v_profile_scenario",
+			},
+		},
+		{
+			name:       "ワークスペース終了の未注入を安全な失敗で返す",
+			operation:  "exit",
+			useCaseNil: true,
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name:      "ワークスペース終了のユースケース失敗を安全に返す",
+			operation: "exit",
+			wantCode:  apperr.CodeScenarioNotFound,
+		},
+		{
+			name:      "実行準備成功を返す",
+			operation: "prepare",
+			repository: verificationScenarioHandlerRepositoryStub{
+				found:          true,
+				workspaceFound: true,
+				workspaceState: "test",
+			},
+		},
+		{
+			name:       "実行準備の未注入を安全な失敗で返す",
+			operation:  "prepare",
+			useCaseNil: true,
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name:      "実行準備のユースケース失敗を安全に返す",
+			operation: "prepare",
+			wantCode:  apperr.CodeScenarioNotFound,
+		},
+		{
+			name:      "実行状態更新成功を返す",
+			operation: "update",
+			repository: verificationScenarioHandlerRepositoryStub{
+				runScenarioID:  "scenario-1",
+				runState:       "prepared",
+				runFound:       true,
+				updateRunFound: true,
+			},
+		},
+		{
+			name:       "実行状態更新の未注入を安全な失敗で返す",
+			operation:  "update",
+			useCaseNil: true,
+			wantCode:   apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name:      "実行状態更新のユースケース失敗を安全に返す",
+			operation: "update",
+			wantCode:  apperr.CodeScenarioNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var scenarioUseCase *usecase.VerificationScenarioUseCase
+			if !tt.useCaseNil {
+				scenarioUseCase = usecase.NewVerificationScenarioUseCase(
+					verificationScenarioHandlerProfilesStub{
+						profiles: []domain.Profile{profile},
+						activeID: stringPointer(profile.ID),
+					},
+					tt.repository,
+					verificationScenarioHandlerWorkspaceStub{},
+				)
+			}
+			handler := NewAppHandler(applogger.NewWithWriter(&bytes.Buffer{}, slog.LevelDebug), config.NewStore(t.TempDir()), nil, scenarioUseCase)
+
+			var errorCode string
+			var success bool
+			switch tt.operation {
+			case "enter":
+				got := handler.EnterVerificationWorkspace("scenario-1")
+				success = got.Data != nil && got.Error == nil && got.Data.ScenarioID == "scenario-1" && got.Data.WorkspaceName != "" && got.Data.Mode == "test"
+				if got.Error != nil {
+					errorCode = got.Error.Code
+				}
+			case "exit":
+				got := handler.ExitVerificationWorkspace("scenario-1")
+				success = got.Data != nil && got.Error == nil
+				if got.Error != nil {
+					errorCode = got.Error.Code
+				}
+			case "prepare":
+				got := handler.PrepareVerificationRun(PrepareVerificationRunRequest{
+					ScenarioID: "scenario-1",
+					RunID:      "run-1",
+				})
+				success = got.Data != nil && got.Error == nil
+				if got.Error != nil {
+					errorCode = got.Error.Code
+				}
+			case "update":
+				got := handler.UpdateVerificationRunState(UpdateVerificationRunStateRequest{
+					RunID: "run-1",
+					State: "running",
+				})
+				success = got.Data != nil && got.Error == nil
+				if got.Error != nil {
+					errorCode = got.Error.Code
+				}
+			}
+			if tt.wantCode != "" {
+				if success {
+					t.Errorf("%s handler succeeded, want error response", tt.operation)
+				}
+				if errorCode != string(tt.wantCode) {
+					t.Errorf("Error.Code = %q, want %q", errorCode, tt.wantCode)
+				}
+
+				return
+			}
+			if !success {
+				t.Errorf("%s handler success = %v, want true; error code = %q", tt.operation, success, errorCode)
 			}
 		})
 	}
