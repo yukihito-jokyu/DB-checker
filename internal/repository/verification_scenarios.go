@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -73,6 +74,45 @@ func (r *SQLiteVerificationScenarioRepository) ListVerificationScenarios(ctx con
 	}
 
 	return scenarios, nil
+}
+
+// 検証シナリオ詳細取得
+func (r *SQLiteVerificationScenarioRepository) GetVerificationScenario(ctx context.Context, profileID, scenarioID string) (domain.VerificationScenario, bool, error) {
+	database, err := openVerificationScenarioDatabase("sqlite", r.databasePath)
+	if err != nil {
+		return domain.VerificationScenario{}, false, fmt.Errorf("open verification scenario database: %w", err)
+	}
+	defer database.Close()
+
+	var id, name, primaryTable, definitionJSON, createdAtValue, updatedAtValue string
+	var workspaceName sql.NullString
+	err = database.QueryRowContext(ctx, `SELECT id, name, primary_table, definition_json, workspace_name, created_at, updated_at FROM scenarios WHERE profile_id = ? AND id = ?`, profileID, scenarioID).Scan(&id, &name, &primaryTable, &definitionJSON, &workspaceName, &createdAtValue, &updatedAtValue)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.VerificationScenario{}, false, nil
+	}
+	if err != nil {
+		return domain.VerificationScenario{}, false, fmt.Errorf("query verification scenario: %w", err)
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, createdAtValue)
+	if err != nil {
+		return domain.VerificationScenario{}, false, fmt.Errorf("parse verification scenario created time: %w", err)
+	}
+	updatedAt, err := time.Parse(time.RFC3339, updatedAtValue)
+	if err != nil {
+		return domain.VerificationScenario{}, false, fmt.Errorf("parse verification scenario updated time: %w", err)
+	}
+
+	var workspaceNameValue *string
+	if workspaceName.Valid {
+		workspaceNameValue = &workspaceName.String
+	}
+	scenario, err := domain.NewVerificationScenario(id, name, primaryTable, []byte(definitionJSON), workspaceNameValue, createdAt, updatedAt)
+	if err != nil {
+		return domain.VerificationScenario{}, false, fmt.Errorf("decode verification scenario: %w", err)
+	}
+
+	return scenario, true, nil
 }
 
 // シナリオDBマイグレーション
