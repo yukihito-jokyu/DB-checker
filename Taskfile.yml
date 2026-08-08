@@ -9,6 +9,8 @@ tasks:
 
   generate:
     desc: Wails の frontend binding を生成する
+    env:
+      GOCACHE: '{{.TASKFILE_DIR}}/.cache/go-build'
     cmds:
       - wails generate module
       # Wails v2.10.1 は models.ts の空行にタブを出力し、runtime を実行可能にコピーするため正規化する。

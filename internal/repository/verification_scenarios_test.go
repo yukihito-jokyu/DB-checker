@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -725,6 +726,296 @@ func TestSQLiteVerificationScenarioRepositoryGetVerificationScenarioFailures(t *
 	}
 }
 
+// SQLiteシナリオ削除検証
+func TestSQLiteVerificationScenarioRepositoryDeleteVerificationScenario(t *testing.T) {
+	tests := []struct {
+		name            string
+		profileID       string
+		workspaceState  *string
+		runState        *string
+		removeWorkspace bool
+		wantFound       bool
+		wantRemoved     bool
+		wantBusy        bool
+	}{
+		{
+			name:           "停止済みworkspaceを残してシナリオを削除する",
+			profileID:      "profile-1",
+			workspaceState: stringPointer("inactive"),
+			wantFound:      true,
+		},
+		{
+			name:           "使用中workspaceを拒否する",
+			profileID:      "profile-1",
+			workspaceState: stringPointer("active"),
+			wantBusy:       true,
+		},
+		{
+			name:      "実行中runを拒否する",
+			profileID: "profile-1",
+			runState:  stringPointer("running"),
+			wantBusy:  true,
+		},
+		{
+			name:      "他プロファイルのシナリオを削除しない",
+			profileID: "profile-2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+			if err := repository.Initialize(context.Background()); err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+			seedVerificationScenario(t, repository.databasePath, verificationScenarioSeed{
+				id:             "scenario-1",
+				profileID:      "profile-1",
+				name:           "検証",
+				primaryTable:   "orders",
+				definitionJSON: `{}`,
+				updatedAt:      "2026-08-08T12:00:00Z",
+			})
+			database, err := sql.Open("sqlite", repository.databasePath)
+			if err != nil {
+				t.Fatalf("sql.Open() error = %v", err)
+			}
+			defer database.Close()
+			if tt.workspaceState != nil {
+				if _, err := database.ExecContext(context.Background(), `INSERT INTO verification_workspaces (profile_id, scenario_id, state) VALUES (?, ?, ?)`, "profile-1", "scenario-1", *tt.workspaceState); err != nil {
+					t.Fatalf("INSERT verification_workspaces error = %v", err)
+				}
+			}
+			if tt.runState != nil {
+				if _, err := database.ExecContext(context.Background(), `INSERT INTO verification_runs (id, profile_id, scenario_id, state) VALUES (?, ?, ?, ?)`, "run-1", "profile-1", "scenario-1", *tt.runState); err != nil {
+					t.Fatalf("INSERT verification_runs error = %v", err)
+				}
+			}
+
+			found, workspaceRemoved, busy, err := repository.DeleteVerificationScenario(context.Background(), tt.profileID, "scenario-1", tt.removeWorkspace)
+			if err != nil {
+				t.Fatalf("DeleteVerificationScenario() error = %v", err)
+			}
+			if found != tt.wantFound {
+				t.Errorf("DeleteVerificationScenario() found = %v, want %v", found, tt.wantFound)
+			}
+			if workspaceRemoved != tt.wantRemoved {
+				t.Errorf("DeleteVerificationScenario() workspace removed = %v, want %v", workspaceRemoved, tt.wantRemoved)
+			}
+			if busy != tt.wantBusy {
+				t.Errorf("DeleteVerificationScenario() busy = %v, want %v", busy, tt.wantBusy)
+			}
+		})
+	}
+}
+
+// SQLiteシナリオ削除失敗検証
+func TestSQLiteVerificationScenarioRepositoryDeleteVerificationScenarioFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(string, string) (*sql.DB, error)
+		want string
+	}{
+		{
+			name: "データベースオープン失敗を返す",
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("open failed")
+			},
+			want: "open verification scenario database",
+		},
+		{
+			name: "トランザクション開始失敗を返す",
+			open: verificationScenarioScriptOpener("delete-begin-error", verificationScenarioDatabaseScript{
+				begin: func() (driver.Tx, error) {
+					return nil, errors.New("begin failed")
+				},
+			}),
+			want: "begin verification scenario deletion",
+		},
+		{
+			name: "workspace状態確認失敗を返す",
+			open: verificationScenarioScriptOpener("delete-workspace-query-error", verificationScenarioDatabaseScript{
+				query: func(string) (driver.Rows, error) {
+					return nil, errors.New("workspace query failed")
+				},
+			}),
+			want: "check verification workspace state",
+		},
+		{
+			name: "run状態確認失敗を返す",
+			open: verificationScenarioScriptOpener("delete-run-query-error", verificationScenarioDatabaseScript{
+				query: func(query string) (driver.Rows, error) {
+					if containsErrorTextValue(query, "verification_workspaces") {
+						return verificationScenarioExistsRows(false), nil
+					}
+
+					return nil, errors.New("run query failed")
+				},
+			}),
+			want: "check verification run state",
+		},
+		{
+			name: "専用検証先の物理削除未対応を返す",
+			open: verificationScenarioScriptOpener("delete-workspace-removal-unsupported", verificationScenarioDatabaseScript{
+				query: verificationScenarioInactiveRows,
+			}),
+			want: "verification workspace removal must be coordinated by usecase",
+		},
+		{
+			name: "シナリオ削除失敗を返す",
+			open: verificationScenarioScriptOpener("delete-scenario-error", verificationScenarioDatabaseScript{
+				query: verificationScenarioInactiveRows,
+				exec: func(string) (driver.Result, error) {
+					return nil, errors.New("delete failed")
+				},
+			}),
+			want: "delete verification scenario",
+		},
+		{
+			name: "削除件数取得失敗を返す",
+			open: verificationScenarioScriptOpener("delete-rows-affected-error", verificationScenarioDatabaseScript{
+				query: verificationScenarioInactiveRows,
+				exec: func(string) (driver.Result, error) {
+					return verificationScenarioTestResult{rowsAffectedErr: errors.New("count failed")}, nil
+				},
+			}),
+			want: "count deleted verification scenarios",
+		},
+		{
+			name: "コミット失敗を返す",
+			open: verificationScenarioScriptOpener("delete-commit-error", verificationScenarioDatabaseScript{
+				query: verificationScenarioInactiveRows,
+				begin: func() (driver.Tx, error) {
+					return verificationScenarioTestTransaction{commitErr: errors.New("commit failed")}, nil
+				},
+			}),
+			want: "commit verification scenario deletion",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withVerificationScenarioOpener(t, tt.open)
+			repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+
+			_, _, _, err := repository.DeleteVerificationScenario(context.Background(), "profile-1", "scenario-1", tt.name == "専用検証先の物理削除未対応を返す")
+			if !containsErrorText(err, tt.want) {
+				t.Errorf("DeleteVerificationScenario() error = %v, want text %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// SQLite専用検証先削除未対応時の状態保持検証
+func TestSQLiteVerificationScenarioRepositoryDeleteVerificationScenarioKeepsStateWhenWorkspaceRemovalIsUnsupported(t *testing.T) {
+	repository := NewSQLiteVerificationScenarioRepository(t.TempDir())
+	if err := repository.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	seedVerificationScenario(t, repository.databasePath, verificationScenarioSeed{
+		id:             "scenario-1",
+		profileID:      "profile-1",
+		name:           "検証",
+		primaryTable:   "orders",
+		definitionJSON: `{}`,
+		updatedAt:      "2026-08-08T12:00:00Z",
+	})
+	database, err := sql.Open("sqlite", repository.databasePath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer database.Close()
+	if _, err := database.ExecContext(context.Background(), `INSERT INTO verification_workspaces (profile_id, scenario_id, state) VALUES (?, ?, ?)`, "profile-1", "scenario-1", "inactive"); err != nil {
+		t.Fatalf("INSERT verification_workspaces error = %v", err)
+	}
+
+	_, _, _, err = repository.DeleteVerificationScenario(context.Background(), "profile-1", "scenario-1", true)
+	if !containsErrorText(err, "verification workspace removal must be coordinated by usecase") {
+		t.Errorf("DeleteVerificationScenario() error = %v, want unsupported workspace removal error", err)
+	}
+	for _, query := range []string{
+		`SELECT COUNT(*) FROM scenarios WHERE profile_id = 'profile-1' AND id = 'scenario-1'`,
+		`SELECT COUNT(*) FROM verification_workspaces WHERE profile_id = 'profile-1' AND scenario_id = 'scenario-1'`,
+	} {
+		var count int
+		if err := database.QueryRowContext(context.Background(), query).Scan(&count); err != nil {
+			t.Fatalf("state count query error = %v", err)
+		}
+		if count != 1 {
+			t.Errorf("state count = %d, want 1", count)
+		}
+	}
+}
+
+// SQLiteシナリオDBバージョン1移行検証
+func TestSQLiteVerificationScenarioRepositoryInitializeMigratesVersion1Database(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), verificationScenarioDatabaseName)
+	database, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer database.Close()
+
+	if _, err := database.ExecContext(context.Background(), `CREATE TABLE scenarios (
+		id TEXT PRIMARY KEY,
+		profile_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		primary_table TEXT NOT NULL,
+		definition_json TEXT NOT NULL,
+		workspace_name TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("CREATE TABLE scenarios error = %v", err)
+	}
+	if _, err := database.ExecContext(context.Background(), `INSERT INTO scenarios (id, profile_id, name, primary_table, definition_json, workspace_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "scenario-1", "profile-1", "既存シナリオ", "orders", `{}`, "verification_orders", "2026-08-08T12:00:00Z", "2026-08-08T12:00:00Z"); err != nil {
+		t.Fatalf("INSERT scenarios error = %v", err)
+	}
+	if _, err := database.ExecContext(context.Background(), "PRAGMA user_version = 1"); err != nil {
+		t.Fatalf("PRAGMA user_version error = %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("database.Close() error = %v", err)
+	}
+
+	repository := NewSQLiteVerificationScenarioRepository(filepath.Dir(databasePath))
+	if err := repository.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	database, err = sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer database.Close()
+	var version int
+	if err := database.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("PRAGMA user_version query error = %v", err)
+	}
+	if version != 3 {
+		t.Errorf("user_version = %d, want 3", version)
+	}
+	for _, table := range []string{
+		"verification_workspaces",
+		"verification_runs",
+	} {
+		var found bool
+		if err := database.QueryRowContext(context.Background(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)`, table).Scan(&found); err != nil {
+			t.Fatalf("table existence query error = %v", err)
+		}
+		if !found {
+			t.Errorf("table %q = absent, want present", table)
+		}
+	}
+	var name string
+	if err := database.QueryRowContext(context.Background(), `SELECT name FROM scenarios WHERE profile_id = ? AND id = ?`, "profile-1", "scenario-1").Scan(&name); err != nil {
+		t.Fatalf("existing scenario query error = %v", err)
+	}
+	if name != "既存シナリオ" {
+		t.Errorf("scenario name = %q, want %q", name, "既存シナリオ")
+	}
+}
+
 // SQLiteシナリオDB初期化検証
 func TestSQLiteVerificationScenarioRepositoryInitialize(t *testing.T) {
 	tests := []struct {
@@ -735,7 +1026,7 @@ func TestSQLiteVerificationScenarioRepositoryInitialize(t *testing.T) {
 		{
 			name: "初期化に成功する",
 			open: verificationScenarioScriptOpener("initialize-success", verificationScenarioDatabaseScript{
-				query: verificationScenarioVersionRows(1),
+				query: verificationScenarioVersionRows(2),
 			}),
 		},
 		{
@@ -823,15 +1114,15 @@ func TestMigrateVerificationScenarioDatabase(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "既存バージョン1を維持する",
+			name: "既存バージョン3を維持する",
 			script: verificationScenarioDatabaseScript{
-				query: verificationScenarioVersionRows(1),
+				query: verificationScenarioVersionRows(3),
 			},
 		},
 		{
 			name: "未対応バージョンを拒否する",
 			script: verificationScenarioDatabaseScript{
-				query: verificationScenarioVersionRows(2),
+				query: verificationScenarioVersionRows(4),
 			},
 			want: "unsupported verification scenario schema version",
 		},
@@ -857,7 +1148,7 @@ func TestMigrateVerificationScenarioDatabase(t *testing.T) {
 		},
 		{
 			name:   "バージョン保存失敗",
-			script: verificationScenarioMigrationExecError("PRAGMA user_version = 1", "version write failed"),
+			script: verificationScenarioMigrationExecError("PRAGMA user_version = 3", "version write failed"),
 			want:   "write verification scenario schema version",
 		},
 		{
@@ -1007,6 +1298,23 @@ func verificationScenarioVersionRows(version int64) func(string) (driver.Rows, e
 	}
 }
 
+// EXISTS結果行生成
+func verificationScenarioExistsRows(exists bool) *verificationScenarioTestRows {
+	return &verificationScenarioTestRows{
+		columns: []string{"exists"},
+		values:  [][]driver.Value{{exists}},
+	}
+}
+
+// 停止済み状態行生成
+func verificationScenarioInactiveRows(query string) (driver.Rows, error) {
+	if containsErrorTextValue(query, "verification_workspaces") {
+		return verificationScenarioExistsRows(false), nil
+	}
+
+	return verificationScenarioExistsRows(false), nil
+}
+
 // シナリオ行生成
 func verificationScenarioRows(id, name, primaryTable, updatedAt string) *verificationScenarioTestRows {
 	return &verificationScenarioTestRows{
@@ -1091,4 +1399,374 @@ func containsSubstring(value, want string) bool {
 	}
 
 	return false
+}
+
+type verificationWorkspaceCredentialsStub struct {
+	password        string
+	found           bool
+	err             error
+	credentialCalls *int
+}
+
+// 資格情報取得再現
+func (s verificationWorkspaceCredentialsStub) GetCredential(string) (string, bool, error) {
+	if s.credentialCalls != nil {
+		*s.credentialCalls++
+	}
+
+	return s.password, s.found, s.err
+}
+
+// 外部検証先DDL検証
+func TestVerificationWorkspaceRepositoryDDL(t *testing.T) {
+	profile := verificationWorkspaceProfile(t, domain.DBTypeMySQL)
+	tests := []struct {
+		name                  string
+		dbType                domain.DBType
+		delete                bool
+		workspaceName         string
+		host                  string
+		credentials           verificationWorkspaceCredentialsStub
+		open                  func(string, string) (*sql.DB, error)
+		context               context.Context
+		wantStatement         string
+		wantError             string
+		wantOpenCalls         int
+		wantCredentialSkipped bool
+	}{
+		{
+			name:          "MySQL databaseを作成する",
+			dbType:        domain.DBTypeMySQL,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantStatement: "CREATE DATABASE IF NOT EXISTS `db_checker_v_profile_scenario`",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "PostgreSQL schemaを作成する",
+			dbType:        domain.DBTypePostgres,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantStatement: `CREATE SCHEMA IF NOT EXISTS "db_checker_v_profile_scenario"`,
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "MySQL databaseを削除する",
+			dbType:        domain.DBTypeMySQL,
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantStatement: "DROP DATABASE IF EXISTS `db_checker_v_profile_scenario`",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "PostgreSQL schemaを削除する",
+			dbType:        domain.DBTypePostgres,
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantStatement: `DROP SCHEMA IF EXISTS "db_checker_v_profile_scenario" CASCADE`,
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "IPv4 loopback hostでdatabaseを作成する",
+			workspaceName: "db_checker_v_profile_scenario",
+			host:          "127.0.0.1",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantStatement: "CREATE DATABASE IF NOT EXISTS `db_checker_v_profile_scenario`",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "IPv6 loopback hostでdatabaseを作成する",
+			workspaceName: "db_checker_v_profile_scenario",
+			host:          "::1",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantStatement: "CREATE DATABASE IF NOT EXISTS `db_checker_v_profile_scenario`",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "localhostを資格情報取得前に拒否する",
+			workspaceName: "db_checker_v_profile_scenario",
+			host:          "localhost",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantError:             "verification workspace host is not allowed",
+			wantCredentialSkipped: true,
+		},
+		{
+			name:          "localhostの削除を資格情報取得前に拒否する",
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			host:          "localhost",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantError:             "verification workspace host is not allowed",
+			wantCredentialSkipped: true,
+		},
+		{
+			name:          "リモートhostを資格情報取得前に拒否する",
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantError:             "verification workspace host is not allowed",
+			wantCredentialSkipped: true,
+		},
+		{
+			name:          "リモートhostの削除を資格情報取得前に拒否する",
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantError:             "verification workspace host is not allowed",
+			wantCredentialSkipped: true,
+		},
+		{
+			name:          "不正な識別子では接続しない",
+			workspaceName: "invalid-name",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantError: "invalid verification workspace identifier",
+		},
+		{
+			name:          "資格情報なしでは作成接続しない",
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				found: false,
+			},
+			wantError: "verification credential unavailable",
+		},
+		{
+			name:          "資格情報取得失敗を安全に返す",
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				err: errors.New("password=secret"),
+			},
+			wantError: "load verification credential",
+		},
+		{
+			name:          "接続失敗を安全に返す",
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("dsn=password=secret")
+			},
+			wantError:     "open verification connection",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "実行失敗を安全に返す",
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			open:          verificationWorkspaceScriptOpener("workspace-exec-error", errors.New("password=secret")),
+			wantError:     "create verification workspace",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "削除時に不正な識別子では接続しない",
+			delete:        true,
+			workspaceName: "invalid-name",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			wantError: "invalid verification workspace identifier",
+		},
+		{
+			name:          "削除時に資格情報なしでは接続しない",
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				found: false,
+			},
+			wantError: "verification credential unavailable",
+		},
+		{
+			name:          "削除時の資格情報取得失敗を安全に返す",
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				err: errors.New("password=secret"),
+			},
+			wantError: "load verification credential",
+		},
+		{
+			name:          "削除時の接続失敗を安全に返す",
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			open: func(string, string) (*sql.DB, error) {
+				return nil, errors.New("dsn=password=secret")
+			},
+			wantError:     "open verification connection",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "削除時の実行失敗を安全に返す",
+			delete:        true,
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			open:          verificationWorkspaceScriptOpener("workspace-drop-exec-error", errors.New("password=secret")),
+			wantError:     "delete verification workspace",
+			wantOpenCalls: 1,
+		},
+		{
+			name:          "キャンセル済みcontextを安全に返す",
+			workspaceName: "db_checker_v_profile_scenario",
+			credentials: verificationWorkspaceCredentialsStub{
+				password: "secret",
+				found:    true,
+			},
+			context:       verificationWorkspaceCanceledContext(),
+			wantError:     "create verification workspace",
+			wantOpenCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statement := ""
+			openCalls := 0
+			credentialCalls := 0
+			credentials := tt.credentials
+			credentials.credentialCalls = &credentialCalls
+			open := tt.open
+			if open == nil {
+				open = func(driverName, dsn string) (*sql.DB, error) {
+					openCalls++
+					if strings.Contains(dsn, "secret") == false {
+						t.Errorf("DSN = %q, want credential", dsn)
+					}
+
+					return openVerificationScenarioTestDatabase(nil, "workspace-"+tt.name, verificationScenarioDatabaseScript{
+						exec: func(query string) (driver.Result, error) {
+							statement = query
+
+							return driver.RowsAffected(1), nil
+						},
+					}), nil
+				}
+			} else {
+				baseOpen := open
+				open = func(driverName, dsn string) (*sql.DB, error) {
+					openCalls++
+
+					return baseOpen(driverName, dsn)
+				}
+			}
+			repository := &VerificationWorkspaceRepository{
+				credentials: credentials,
+				open:        open,
+			}
+			selected := profile
+			if tt.dbType != "" {
+				selected = verificationWorkspaceProfile(t, tt.dbType)
+			}
+			if tt.host != "" {
+				selected.Host = tt.host
+			} else if strings.Contains(tt.name, "リモートhost") {
+				selected.Host = "db.example.com"
+			}
+			ctx := tt.context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+
+			var err error
+			if tt.delete {
+				err = repository.DeleteWorkspace(ctx, selected, tt.workspaceName)
+			} else {
+				err = repository.CreateWorkspace(ctx, selected, tt.workspaceName)
+			}
+			if tt.wantError == "" && err != nil {
+				t.Fatalf("workspace DDL error = %v", err)
+			}
+			if tt.wantError != "" && (err == nil || err.Error() != tt.wantError) {
+				t.Errorf("workspace DDL error = %v, want %q", err, tt.wantError)
+			}
+			if err != nil && strings.Contains(err.Error(), "secret") {
+				t.Errorf("workspace DDL error = %q, must not contain credential", err)
+			}
+			if openCalls != tt.wantOpenCalls {
+				t.Errorf("open calls = %d, want %d", openCalls, tt.wantOpenCalls)
+			}
+			if tt.wantCredentialSkipped && credentialCalls != 0 {
+				t.Errorf("credential calls = %d, want 0", credentialCalls)
+			}
+			if statement != tt.wantStatement {
+				t.Errorf("statement = %q, want %q", statement, tt.wantStatement)
+			}
+		})
+	}
+}
+
+// 検証先プロファイル生成
+func verificationWorkspaceProfile(t *testing.T, dbType domain.DBType) domain.Profile {
+	t.Helper()
+	schema := "public"
+	if dbType == domain.DBTypeMySQL {
+		schema = ""
+	}
+	profile, err := domain.NewProfile("profile-1", "検証", dbType, "127.0.0.1", 3306, "app", schema, "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+
+	return profile
+}
+
+// 実行失敗用オープン生成
+func verificationWorkspaceScriptOpener(name string, execErr error) func(string, string) (*sql.DB, error) {
+	return func(string, string) (*sql.DB, error) {
+		return openVerificationScenarioTestDatabase(nil, name, verificationScenarioDatabaseScript{
+			exec: func(string) (driver.Result, error) { return nil, execErr },
+		}), nil
+	}
+}
+
+// キャンセル済みコンテキスト生成
+func verificationWorkspaceCanceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	return ctx
 }

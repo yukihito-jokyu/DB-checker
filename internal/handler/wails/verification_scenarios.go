@@ -74,6 +74,99 @@ func (h *AppHandler) UpdateVerificationScenario(request UpdateVerificationScenar
 	return OK(verificationScenarioResponse(scenario))
 }
 
+// 検証シナリオ削除
+func (h *AppHandler) DeleteVerificationScenario(request DeleteVerificationScenarioRequest) Response[DeleteScenarioResponse] {
+	h.logger.Info(context.Background(), "verification scenario delete requested", slog.String("operation", "verification_scenario_delete"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification scenario delete failed", "verification_scenario_delete", err)
+
+		return Fail[DeleteScenarioResponse](err)
+	}
+
+	workspaceRemoved, err := h.verificationScenarios.DeleteVerificationScenario(context.Background(), request.ScenarioID, request.RemoveWorkspace)
+	if err != nil {
+		h.logFailureWithCode("verification scenario delete failed", "verification_scenario_delete", err)
+
+		return Fail[DeleteScenarioResponse](err)
+	}
+
+	return OK(DeleteScenarioResponse{ScenarioID: request.ScenarioID, WorkspaceRemoved: workspaceRemoved})
+}
+
+// 検証ワークスペース開始
+func (h *AppHandler) EnterVerificationWorkspace(scenarioID string) Response[VerificationWorkspaceResponse] {
+	h.logger.Info(context.Background(), "verification workspace enter requested", slog.String("operation", "verification_workspace_enter"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification workspace enter failed", "verification_workspace_enter", err)
+
+		return Fail[VerificationWorkspaceResponse](err)
+	}
+	name, err := h.verificationScenarios.EnterVerificationWorkspace(context.Background(), scenarioID)
+	if err != nil {
+		h.logFailureWithCode("verification workspace enter failed", "verification_workspace_enter", err)
+
+		return Fail[VerificationWorkspaceResponse](err)
+	}
+
+	return OK(VerificationWorkspaceResponse{ScenarioID: scenarioID, WorkspaceName: name, Mode: "test"})
+}
+
+// 検証ワークスペース終了
+func (h *AppHandler) ExitVerificationWorkspace(scenarioID string) Response[struct{}] {
+	h.logger.Info(context.Background(), "verification workspace exit requested", slog.String("operation", "verification_workspace_exit"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification workspace exit failed", "verification_workspace_exit", err)
+
+		return Fail[struct{}](err)
+	}
+	if err := h.verificationScenarios.ExitVerificationWorkspace(context.Background(), scenarioID); err != nil {
+		h.logFailureWithCode("verification workspace exit failed", "verification_workspace_exit", err)
+
+		return Fail[struct{}](err)
+	}
+
+	return OK(struct{}{})
+}
+
+// 検証実行状態作成
+func (h *AppHandler) PrepareVerificationRun(request PrepareVerificationRunRequest) Response[struct{}] {
+	h.logger.Info(context.Background(), "verification run prepare requested", slog.String("operation", "verification_run_prepare"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification run prepare failed", "verification_run_prepare", err)
+
+		return Fail[struct{}](err)
+	}
+	if err := h.verificationScenarios.PrepareVerificationRun(context.Background(), request.ScenarioID, request.RunID); err != nil {
+		h.logFailureWithCode("verification run prepare failed", "verification_run_prepare", err)
+
+		return Fail[struct{}](err)
+	}
+
+	return OK(struct{}{})
+}
+
+// 検証実行状態更新
+func (h *AppHandler) UpdateVerificationRunState(request UpdateVerificationRunStateRequest) Response[struct{}] {
+	h.logger.Info(context.Background(), "verification run state update requested", slog.String("operation", "verification_run_state_update"))
+	if h.verificationScenarios == nil {
+		err := apperr.New(apperr.CodeScenarioStoreFailed)
+		h.logFailureWithCode("verification run state update failed", "verification_run_state_update", err)
+
+		return Fail[struct{}](err)
+	}
+	if err := h.verificationScenarios.UpdateVerificationRunState(context.Background(), request.RunID, request.State); err != nil {
+		h.logFailureWithCode("verification run state update failed", "verification_run_state_update", err)
+
+		return Fail[struct{}](err)
+	}
+
+	return OK(struct{}{})
+}
+
 // 検証シナリオ一覧取得
 func (h *AppHandler) ListVerificationScenarios() Response[[]VerificationScenarioSummaryResponse] {
 	h.logger.Info(context.Background(), "verification scenarios requested", slog.String("operation", "verification_scenarios_list"))

@@ -70,6 +70,32 @@ type UpdateVerificationScenarioRequest struct {
 	Definition   map[string]any `json:"definition"`
 }
 
+type DeleteVerificationScenarioRequest struct {
+	ScenarioID      string `json:"scenarioId"`
+	RemoveWorkspace bool   `json:"removeWorkspace"`
+}
+
+type DeleteScenarioResponse struct {
+	ScenarioID       string `json:"scenarioId"`
+	WorkspaceRemoved bool   `json:"workspaceRemoved"`
+}
+
+type VerificationWorkspaceResponse struct {
+	ScenarioID    string `json:"scenarioId"`
+	WorkspaceName string `json:"workspaceName"`
+	Mode          string `json:"mode"`
+}
+
+type PrepareVerificationRunRequest struct {
+	ScenarioID string `json:"scenarioId"`
+	RunID      string `json:"runId"`
+}
+
+type UpdateVerificationRunStateRequest struct {
+	RunID string `json:"runId"`
+	State string `json:"state"`
+}
+
 type SaveConnectionProfileRequest struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`

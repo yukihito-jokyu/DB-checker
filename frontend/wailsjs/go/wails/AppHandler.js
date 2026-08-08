@@ -22,8 +22,20 @@ export function DeleteTableRow(arg1) {
   return window['go']['wails']['AppHandler']['DeleteTableRow'](arg1);
 }
 
+export function DeleteVerificationScenario(arg1) {
+  return window['go']['wails']['AppHandler']['DeleteVerificationScenario'](arg1);
+}
+
 export function DuplicateVerificationScenario(arg1) {
   return window['go']['wails']['AppHandler']['DuplicateVerificationScenario'](arg1);
+}
+
+export function EnterVerificationWorkspace(arg1) {
+  return window['go']['wails']['AppHandler']['EnterVerificationWorkspace'](arg1);
+}
+
+export function ExitVerificationWorkspace(arg1) {
+  return window['go']['wails']['AppHandler']['ExitVerificationWorkspace'](arg1);
 }
 
 export function GetConfig() {
@@ -70,6 +82,10 @@ export function LoadFlowState() {
   return window['go']['wails']['AppHandler']['LoadFlowState']();
 }
 
+export function PrepareVerificationRun(arg1) {
+  return window['go']['wails']['AppHandler']['PrepareVerificationRun'](arg1);
+}
+
 export function SaveConnectionProfile(arg1) {
   return window['go']['wails']['AppHandler']['SaveConnectionProfile'](arg1);
 }
@@ -80,6 +96,10 @@ export function SaveFlowState(arg1) {
 
 export function UpdateTableCell(arg1) {
   return window['go']['wails']['AppHandler']['UpdateTableCell'](arg1);
+}
+
+export function UpdateVerificationRunState(arg1) {
+  return window['go']['wails']['AppHandler']['UpdateVerificationRunState'](arg1);
 }
 
 export function UpdateVerificationScenario(arg1) {
