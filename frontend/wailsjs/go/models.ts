@@ -214,6 +214,22 @@ export namespace wails {
 		    return a;
 		}
 	}
+	export class CreateVerificationScenarioRequest {
+	    name: string;
+	    primaryTable: string;
+	    definition: Record<string, any>;
+
+	    static createFrom(source: any = {}) {
+	        return new CreateVerificationScenarioRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.primaryTable = source["primaryTable"];
+	        this.definition = source["definition"];
+	    }
+	}
 	export class DatabaseColumnResponse {
 	    name: string;
 	    dataType: string;
