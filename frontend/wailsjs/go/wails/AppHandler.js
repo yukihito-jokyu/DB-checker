@@ -86,6 +86,10 @@ export function PrepareVerificationRun(arg1) {
   return window['go']['wails']['AppHandler']['PrepareVerificationRun'](arg1);
 }
 
+export function PreviewVerificationRun(arg1) {
+  return window['go']['wails']['AppHandler']['PreviewVerificationRun'](arg1);
+}
+
 export function SaveConnectionProfile(arg1) {
   return window['go']['wails']['AppHandler']['SaveConnectionProfile'](arg1);
 }
