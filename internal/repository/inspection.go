@@ -981,6 +981,22 @@ func (r *AppRepository) UpdateCell(ctx context.Context, profile domain.Profile, 
 	return updateCell(ctx, database, profile.DBType, ref, change)
 }
 
+// テーブル行削除
+func (r *AppRepository) DeleteRow(ctx context.Context, profile domain.Profile, password string, ref domain.TableRef, locator domain.RowLocator) (domain.AffectedRows, error) {
+	driverName, dsn := connectionDSN(profile, password)
+	database, err := openDatabase(driverName, dsn)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+	defer database.Close()
+
+	if err := database.PingContext(ctx); err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	return deleteRow(ctx, database, profile.DBType, ref, locator)
+}
+
 // テーブル行追加実行
 func insertRow(ctx context.Context, database *sql.DB, dbType domain.DBType, ref domain.TableRef, row domain.InsertRow) (domain.AffectedRows, error) {
 	structure, err := inspectTableStructure(ctx, database, dbType, ref)
@@ -1121,6 +1137,61 @@ func updateCell(ctx context.Context, database *sql.DB, dbType domain.DBType, ref
 	} else {
 		queryBuilder.WriteString(tableRowsPlaceholder(dbType, 1))
 	}
+	queryBuilder.WriteString(" WHERE ")
+	queryBuilder.WriteString(strings.Join(conditions, " AND "))
+	query := queryBuilder.String()
+	result, err := database.ExecContext(ctx, query, args...)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	affectedRows, err := result.RowsAffected()
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	return domain.AffectedRows{AffectedRows: affectedRows}, nil
+}
+
+// テーブル行削除実行
+func deleteRow(ctx context.Context, database *sql.DB, dbType domain.DBType, ref domain.TableRef, locator domain.RowLocator) (domain.AffectedRows, error) {
+	structure, err := inspectTableStructure(ctx, database, dbType, ref)
+	if err != nil {
+		return domain.AffectedRows{}, err
+	}
+	if err := locator.Validate(ref, structure.Table.Columns); err != nil {
+		return domain.AffectedRows{}, err
+	}
+
+	columns := make(map[string]domain.Column, len(structure.Table.Columns))
+	for _, column := range structure.Table.Columns {
+		columns[column.Name] = column
+	}
+
+	args := make([]any, 0, len(locator.Values))
+	conditions := make([]string, 0, len(locator.Values))
+	parameterIndex := 1
+	for _, value := range locator.Values {
+		column := columns[value.Column]
+		quotedColumn := quoteIdentifier(dbType, value.Column)
+		if value.Kind == domain.CellKindNull {
+			conditions = append(conditions, quotedColumn+" IS NULL")
+
+			continue
+		}
+
+		converted, err := convertInputValue(*value.Value, column.DataType)
+		if err != nil {
+			return domain.AffectedRows{}, err
+		}
+		conditions = append(conditions, fmt.Sprintf("%s = %s", quotedColumn, tableRowsPlaceholder(dbType, parameterIndex)))
+		args = append(args, converted)
+		parameterIndex++
+	}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("DELETE FROM ")
+	queryBuilder.WriteString(qualifiedIdentifier(dbType, ref.Namespace, ref.Name))
 	queryBuilder.WriteString(" WHERE ")
 	queryBuilder.WriteString(strings.Join(conditions, " AND "))
 	query := queryBuilder.String()
