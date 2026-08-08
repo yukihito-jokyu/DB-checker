@@ -8,6 +8,8 @@ export function CheckProfiles():Promise<wails.Response_github_com_yukihito_jokyu
 
 export function DeleteConnectionProfile(arg1:string):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConnectionProfilesResponse_>;
 
+export function DeleteTableRow(arg1:wails.DeleteTableRowRequest):Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_AffectedRowsResponse_>;
+
 export function GetConfig():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_ConfigResponse_>;
 
 export function GetDatabaseSchema():Promise<wails.Response_github_com_yukihito_jokyu_DB_checker_internal_handler_wails_DatabaseSchemaResponse_>;
