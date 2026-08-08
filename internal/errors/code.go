@@ -27,6 +27,7 @@ const (
 	CodeFilterApplyFailed         Code = "FILTER_APPLY_FAILED"
 	CodeSortApplyFailed           Code = "SORT_APPLY_FAILED"
 	CodeScenarioStoreFailed       Code = "SCENARIO_STORE_FAILED"
+	CodeScenarioNotFound          Code = "SCENARIO_NOT_FOUND"
 	CodeOperationTimeout          Code = "OPERATION_TIMEOUT"
 	CodeOperationCanceled         Code = "OPERATION_CANCELED"
 	CodeUnexpected                Code = "UNEXPECTED"
@@ -56,6 +57,7 @@ var defaultMessages = map[Code]message{ // #nosec G101 -- 利用者向けエラ�
 	CodeFilterApplyFailed:         "フィルタ適用に失敗しました",
 	CodeSortApplyFailed:           "並び替えに失敗しました",
 	CodeScenarioStoreFailed:       "検証シナリオの読み込みに失敗しました",
+	CodeScenarioNotFound:          "検証シナリオが見つかりません",
 	CodeOperationTimeout:          "処理がタイムアウトしました",
 	CodeOperationCanceled:         "処理がキャンセルされました",
 	CodeUnexpected:                "予期しないエラーが発生しました",

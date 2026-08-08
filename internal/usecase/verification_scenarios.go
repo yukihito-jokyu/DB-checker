@@ -14,6 +14,28 @@ type VerificationScenarioProfileRepository interface {
 // シナリオリポジトリ
 type VerificationScenarioRepository interface {
 	ListVerificationScenarios(context.Context, string) ([]domain.VerificationScenarioSummary, error)
+	GetVerificationScenario(context.Context, string, string) (domain.VerificationScenario, bool, error)
+}
+
+// アクティブプロファイルのシナリオ詳細取得
+func (u *VerificationScenarioUseCase) GetVerificationScenario(ctx context.Context, scenarioID string) (domain.VerificationScenario, error) {
+	profiles, activeID, err := u.profiles.LoadProfiles()
+	if err != nil {
+		return domain.VerificationScenario{}, err
+	}
+	if activeID == nil || !containsVerificationScenarioProfile(profiles, *activeID) {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+
+	scenario, found, err := u.repository.GetVerificationScenario(ctx, *activeID, scenarioID)
+	if err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+	}
+	if !found {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeScenarioNotFound)
+	}
+
+	return scenario, nil
 }
 
 // 検証シナリオユースケース
