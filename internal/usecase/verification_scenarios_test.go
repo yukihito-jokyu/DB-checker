@@ -25,6 +25,10 @@ type verificationScenarioRepositoryStub struct {
 	profileID   string
 	created     domain.VerificationScenario
 	createCalls int
+	updated     domain.VerificationScenario
+	updateCalls int
+	updateFound bool
+	updateErr   error
 }
 
 // プロファイル読込再現
@@ -53,6 +57,15 @@ func (s *verificationScenarioRepositoryStub) CreateVerificationScenario(_ contex
 	s.createCalls++
 
 	return s.err
+}
+
+// シナリオ更新再現
+func (s *verificationScenarioRepositoryStub) UpdateVerificationScenario(_ context.Context, profileID string, scenario domain.VerificationScenario) (bool, error) {
+	s.profileID = profileID
+	s.updated = scenario
+	s.updateCalls++
+
+	return s.updateFound, s.updateErr
 }
 
 // シナリオ作成ユースケース検証
@@ -326,6 +339,206 @@ func TestVerificationScenarioUseCaseGetVerificationScenario(t *testing.T) {
 			}
 			if repository.profileID != profile.ID {
 				t.Errorf("GetVerificationScenario() profile ID = %q, want %q", repository.profileID, profile.ID)
+			}
+		})
+	}
+}
+
+// シナリオ更新ユースケース検証
+func TestVerificationScenarioUseCaseUpdateVerificationScenario(t *testing.T) {
+	profile, err := domain.NewProfile("profile-1", "Local", domain.DBTypeMySQL, "localhost", 3306, "app", "", "user")
+	if err != nil {
+		t.Fatalf("NewProfile() error = %v", err)
+	}
+	workspaceName := "verification_orders"
+	existing := domain.VerificationScenario{
+		ID:            "scenario-1",
+		Name:          "更新前",
+		PrimaryTable:  "orders",
+		Definition:    verificationScenarioDefinition(),
+		WorkspaceName: &workspaceName,
+		CreatedAt:     time.Date(2026, time.August, 8, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:     time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC),
+	}
+	draft := newVerificationScenarioDraft(t)
+	tests := []struct {
+		name            string
+		profiles        []domain.Profile
+		activeID        *string
+		profilesErr     error
+		repository      verificationScenarioRepositoryStub
+		draft           domain.VerificationScenarioDraft
+		wantCode        apperr.Code
+		wantUpdateCalls int
+	}{
+		{
+			name: "ID作成日時ワークスペースを保持して更新する",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario:    existing,
+				found:       true,
+				updateFound: true,
+			},
+			draft:           draft,
+			wantUpdateCalls: 1,
+		},
+		{
+			name:        "プロファイル読込失敗",
+			profilesErr: errors.New("read profiles failed"),
+			draft:       draft,
+		},
+		{
+			name: "他プロファイルのシナリオを見つけない",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			draft:    draft,
+			wantCode: apperr.CodeScenarioNotFound,
+		},
+		{
+			name: "アクティブプロファイルなし",
+			profiles: []domain.Profile{
+				profile,
+			},
+			draft:    draft,
+			wantCode: apperr.CodeProfileNotFound,
+		},
+		{
+			name: "主対象の一意生成規則不足",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			draft: domain.VerificationScenarioDraft{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition: map[string]any{
+					"childTables": []any{},
+					"rowCounts": map[string]any{
+						"orders": float64(1),
+					},
+					"columnGenerators": map[string]any{
+						"orders": map[string]any{"id": map[string]any{"kind": "fixed"}},
+					},
+					"sql":              []any{"SELECT 1"},
+					"warmupRuns":       float64(0),
+					"iterations":       float64(1),
+					"timeLimitSeconds": float64(1),
+				},
+			},
+			wantCode: apperr.CodePrimaryKeyRequired,
+		},
+		{
+			name: "詳細取得のストア障害",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				err: errors.New("sqlite path=/private/secret"),
+			},
+			draft:    draft,
+			wantCode: apperr.CodeScenarioStoreFailed,
+		},
+		{
+			name: "不正な保存済みIDを拒否する",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario:    domain.VerificationScenario{},
+				found:       true,
+				updateFound: true,
+			},
+			draft:    draft,
+			wantCode: apperr.CodeValidationFailed,
+		},
+		{
+			name: "更新競合で対象が消えた場合は見つからない",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario: existing,
+				found:    true,
+			},
+			draft:           draft,
+			wantCode:        apperr.CodeScenarioNotFound,
+			wantUpdateCalls: 1,
+		},
+		{
+			name: "ストア障害",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			repository: verificationScenarioRepositoryStub{
+				scenario:  existing,
+				found:     true,
+				updateErr: errors.New("sqlite path=/private/secret"),
+			},
+			draft:           draft,
+			wantCode:        apperr.CodeScenarioStoreFailed,
+			wantUpdateCalls: 1,
+		},
+		{
+			name: "下書き形式違反",
+			profiles: []domain.Profile{
+				profile,
+			},
+			activeID: stringPointer(profile.ID),
+			draft: domain.VerificationScenarioDraft{
+				Name:         "検証",
+				PrimaryTable: "orders",
+				Definition:   map[string]any{},
+			},
+			wantCode: apperr.CodeValidationFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repository := tt.repository
+			profiles := verificationScenarioProfilesStub{
+				profiles: tt.profiles,
+				activeID: tt.activeID,
+				err:      tt.profilesErr,
+			}
+			useCase := NewVerificationScenarioUseCase(profiles, &repository)
+
+			got, err := useCase.UpdateVerificationScenario(context.Background(), "scenario-1", tt.draft)
+			if tt.profilesErr != nil {
+				if !errors.Is(err, tt.profilesErr) {
+					t.Errorf("UpdateVerificationScenario() error = %v, want wrapped %v", err, tt.profilesErr)
+				}
+
+				return
+			}
+			if tt.wantCode != "" {
+				if !apperr.IsCode(err, tt.wantCode) {
+					t.Errorf("UpdateVerificationScenario() error code = %v, want %v", apperr.As(err), tt.wantCode)
+				}
+			} else if err != nil {
+				t.Fatalf("UpdateVerificationScenario() error = %v", err)
+			} else {
+				if got.ID != existing.ID || !got.CreatedAt.Equal(existing.CreatedAt) || got.WorkspaceName != existing.WorkspaceName {
+					t.Errorf("UpdateVerificationScenario() = %#v, want preserved identity and workspace", got)
+				}
+				if got.UpdatedAt.Location() != time.UTC || got.UpdatedAt.IsZero() {
+					t.Errorf("UpdatedAt = %v, want non-zero UTC time", got.UpdatedAt)
+				}
+				if !reflect.DeepEqual(repository.updated, got) {
+					t.Errorf("UpdateVerificationScenario() repository scenario = %#v, want %#v", repository.updated, got)
+				}
+			}
+			if repository.updateCalls != tt.wantUpdateCalls {
+				t.Errorf("UpdateVerificationScenario() repository calls = %d, want %d", repository.updateCalls, tt.wantUpdateCalls)
 			}
 		})
 	}

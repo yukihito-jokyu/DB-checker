@@ -20,6 +20,7 @@ type VerificationScenarioRepository interface {
 	CreateVerificationScenario(context.Context, string, domain.VerificationScenario) error
 	ListVerificationScenarios(context.Context, string) ([]domain.VerificationScenarioSummary, error)
 	GetVerificationScenario(context.Context, string, string) (domain.VerificationScenario, bool, error)
+	UpdateVerificationScenario(context.Context, string, domain.VerificationScenario) (bool, error)
 }
 
 // アクティブプロファイルへのシナリオ作成
@@ -62,6 +63,47 @@ func (u *VerificationScenarioUseCase) GetVerificationScenario(ctx context.Contex
 		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
 	}
 	if !found {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeScenarioNotFound)
+	}
+
+	return scenario, nil
+}
+
+// アクティブプロファイルのシナリオ更新
+func (u *VerificationScenarioUseCase) UpdateVerificationScenario(ctx context.Context, scenarioID string, draft domain.VerificationScenarioDraft) (domain.VerificationScenario, error) {
+	profiles, activeID, err := u.profiles.LoadProfiles()
+	if err != nil {
+		return domain.VerificationScenario{}, err
+	}
+	if activeID == nil || !containsVerificationScenarioProfile(profiles, *activeID) {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeProfileNotFound)
+	}
+	if err := draft.Validate(); err != nil {
+		if errors.Is(err, domain.ErrPrimaryKeyRequired) {
+			return domain.VerificationScenario{}, apperr.Wrap(apperr.CodePrimaryKeyRequired, err)
+		}
+
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	existing, found, err := u.repository.GetVerificationScenario(ctx, *activeID, scenarioID)
+	if err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+	}
+	if !found {
+		return domain.VerificationScenario{}, apperr.New(apperr.CodeScenarioNotFound)
+	}
+
+	scenario, err := draft.UpdateVerificationScenario(existing, time.Now().UTC())
+	if err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeValidationFailed, err)
+	}
+
+	updated, err := u.repository.UpdateVerificationScenario(ctx, *activeID, scenario)
+	if err != nil {
+		return domain.VerificationScenario{}, apperr.Wrap(apperr.CodeScenarioStoreFailed, err)
+	}
+	if !updated {
 		return domain.VerificationScenario{}, apperr.New(apperr.CodeScenarioNotFound)
 	}
 
