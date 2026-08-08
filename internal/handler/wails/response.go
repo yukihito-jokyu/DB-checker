@@ -57,6 +57,12 @@ type VerificationScenarioResponse struct {
 	LatestRun     any            `json:"latestRun"`
 }
 
+type CreateVerificationScenarioRequest struct {
+	Name         string         `json:"name"`
+	PrimaryTable string         `json:"primaryTable"`
+	Definition   map[string]any `json:"definition"`
+}
+
 type SaveConnectionProfileRequest struct {
 	ID       string  `json:"id"`
 	Name     string  `json:"name"`
