@@ -9,8 +9,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	apperr "github.com/yukihito-jokyu/DB-checker/internal/errors"
 	wailshandler "github.com/yukihito-jokyu/DB-checker/internal/handler/wails"
 	applogger "github.com/yukihito-jokyu/DB-checker/internal/logger"
+	"github.com/yukihito-jokyu/DB-checker/internal/repository"
 	"github.com/yukihito-jokyu/DB-checker/internal/usecase"
 )
 
@@ -34,7 +36,12 @@ func main() {
 	}
 	appRepository := newApplicationRepository(configStore)
 	appUseCase := usecase.NewAppUseCase(appRepository)
-	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase)
+	verificationScenarioRepository := repository.NewSQLiteVerificationScenarioRepository(configStore.Directory())
+	if !initializeVerificationScenarioStore(context.Background(), logger, verificationScenarioRepository) {
+		return
+	}
+	verificationScenarioUseCase := usecase.NewVerificationScenarioUseCase(appRepository, verificationScenarioRepository)
+	appHandler := wailshandler.NewAppHandler(logger, configStore, appUseCase, verificationScenarioUseCase)
 
 	err = wails.Run(&options.App{
 		Title:  "DB-checker",
@@ -60,4 +67,19 @@ func main() {
 	if err != nil {
 		logger.Error(context.Background(), "wails run failed", err)
 	}
+}
+
+type verificationScenarioStoreInitializer interface {
+	Initialize(context.Context) error
+}
+
+// シナリオストア起動時初期化
+func initializeVerificationScenarioStore(ctx context.Context, logger applogger.Logger, store verificationScenarioStoreInitializer) bool {
+	if err := store.Initialize(ctx); err != nil {
+		logger.ErrorCode(ctx, "verification scenario store initialization failed", string(apperr.CodeScenarioStoreFailed))
+
+		return false
+	}
+
+	return true
 }
